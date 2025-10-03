@@ -105,7 +105,7 @@ mod e2e_tests {
 
         // Verify trader state is reasonable
         assert!(trader.balance >= 900.0, "Should have most balance remaining"); // Started with 1000
-        assert!(trader.total_trades >= 0, "Should have processed some trades");
+        assert!(trader.total_trades > 0, "Should have processed some trades");
 
         println!("Trading Logic test: Balance ${:.2}, Trades: {}, Position: {:.6}",
                 trader.balance, trader.total_trades, trader.position);
