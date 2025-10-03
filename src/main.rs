@@ -127,20 +127,54 @@ async fn run_live() -> Result<()> {
 }
 
 async fn run_backtest() -> Result<()> {
-    // Generate simulated trades with random walk
-    let mut trades = Vec::new();
-    let mut price = 50000.0; // starting price
-    let base_volume = 1.0;
-    
-    for _i in 0..1000 {
-        // Random walk with small steps
-        let change = (rand::random::<f64>() - 0.5) * 100.0; // +/- 50
-        price += change;
-        price = price.clamp(40000.0, 60000.0); // bound it
+    info!("Fetching historical BTC/USD data from Kraken...");
+
+    // Fetch historical OHLC from Kraken (up to 7 days of 1-minute data)
+    let client = reqwest::Client::new();
+    let mut last_time = 0u64;
+    let mut all_ohlc = Vec::new();
+
+    loop {
+        let url = if last_time == 0 {
+            "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1".to_string()
+        } else {
+            format!("https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1&since={}", last_time)
+        };
+        let response = client.get(&url).send().await?;
+        let json: serde_json::Value = response.json().await?;
         
-        let volume = base_volume + (rand::random::<f64>() - 0.5) * 0.5;
-        trades.push((price, volume));
+        if let Some(result) = json["result"].as_object() {
+            if let Some(xbtusd) = result.get("XXBTZUSD") {
+                if let Some(ohlc_array) = xbtusd.as_array() {
+                    for ohlc in ohlc_array {
+                        if let Some(arr) = ohlc.as_array() {
+                            all_ohlc.push(arr.clone());
+                        }
+                    }
+                    // Get last time for next request
+                    if let Some(last) = ohlc_array.last() {
+                        if let Some(time_str) = last.as_array().and_then(|a| a.get(0)).and_then(|v| v.as_u64()) {
+                            last_time = time_str;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Kraken returns up to 720 points per request, stop if less than that
+        if all_ohlc.len() >= 5000 || json["result"]["XXBTZUSD"].as_array().map_or(true, |a| a.len() < 720) {
+            break;
+        }
     }
+
+    let mut trades = Vec::new();
+    for ohlc in &all_ohlc {
+        let close_price: f64 = ohlc[4].as_str().unwrap_or(&ohlc[4].to_string()).parse().unwrap();
+        let volume: f64 = ohlc[6].as_str().unwrap_or(&ohlc[6].to_string()).parse().unwrap();
+        trades.push((close_price, volume));
+    }
+
+    info!("Fetched {} historical trades from Kraken", trades.len());
 
     // Initialize backtester
     let mut backtester = Backtester::new();
@@ -149,7 +183,7 @@ async fn run_backtest() -> Result<()> {
     let prices: Vec<f64> = trades.iter().map(|(p, _)| *p).collect();
     let min_price = prices.iter().fold(f64::INFINITY, |a, &b| a.min(b));
     let max_price = prices.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-    println!("Collected {} simulated trades, price range: {:.2} - {:.2}", trades.len(), min_price, max_price);
+    println!("Historical data: {} points, price range: {:.2} - {:.2}", trades.len(), min_price, max_price);
     
     for (price, amount) in &trades {
         backtester.process_trade(*price, *amount);
