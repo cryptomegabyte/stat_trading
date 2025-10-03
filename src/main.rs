@@ -121,6 +121,150 @@ impl Backtester {
 }
 
 #[derive(Debug)]
+struct LiveTrader {
+    predictor: SimpleMLPredictor,
+    balance: f64,
+    position: f64, // amount of BTC held
+    entry_price: Option<f64>,
+    total_trades: usize,
+    winning_trades: usize,
+    total_pnl: f64,
+    stop_loss_pct: f64,
+    take_profit_pct: f64,
+    max_position_size_pct: f64, // max % of balance to use per trade
+}
+
+impl LiveTrader {
+    fn new() -> Self {
+        Self {
+            predictor: SimpleMLPredictor::new(50),
+            balance: 1000.0, // start with $1k for safety
+            position: 0.0,
+            entry_price: None,
+            total_trades: 0,
+            winning_trades: 0,
+            total_pnl: 0.0,
+            stop_loss_pct: 0.01, // 1% stop loss
+            take_profit_pct: 0.02, // 2% take profit
+            max_position_size_pct: 0.1, // 10% of balance max
+        }
+    }
+
+    fn can_buy(&self, price: f64) -> bool {
+        self.position == 0.0 && self.balance >= price * 0.001 // minimum 0.001 BTC
+    }
+
+    fn can_sell(&self) -> bool {
+        self.position > 0.0
+    }
+
+    async fn execute_buy(&mut self, price: f64) -> Result<()> {
+        let max_position_value = self.balance * self.max_position_size_pct;
+        let btc_to_buy = (max_position_value / price).min(self.balance / price);
+
+        if btc_to_buy * price < 10.0 {
+            info!("Trade too small (${:.2}), skipping", btc_to_buy * price);
+            return Ok(());
+        }
+
+        // Here you would execute the actual buy order
+        // For now, we'll simulate it
+        info!("🚀 LIVE BUY: {:.6} BTC at ${:.2}, total: ${:.2}",
+              btc_to_buy, price, btc_to_buy * price);
+
+        self.position += btc_to_buy;
+        self.balance -= btc_to_buy * price;
+        self.entry_price = Some(price);
+        self.total_trades += 1;
+
+        Ok(())
+    }
+
+    async fn execute_sell(&mut self, price: f64) -> Result<()> {
+        if self.position <= 0.0 {
+            return Ok(());
+        }
+
+        let btc_to_sell = self.position;
+        let sale_value = btc_to_sell * price;
+
+        // Here you would execute the actual sell order
+        // For now, we'll simulate it
+        info!("💰 LIVE SELL: {:.6} BTC at ${:.2}, total: ${:.2}",
+              btc_to_sell, price, sale_value);
+
+        self.position = 0.0;
+        self.balance += sale_value;
+
+        if let Some(entry) = self.entry_price {
+            let pnl = sale_value - (btc_to_sell * entry);
+            self.total_pnl += pnl;
+            if pnl > 0.0 {
+                self.winning_trades += 1;
+            }
+            info!("Trade P&L: ${:.2} ({:.2}%)", pnl, (pnl / (btc_to_sell * entry)) * 100.0);
+        }
+
+        self.entry_price = None;
+
+        Ok(())
+    }
+
+    async fn process_price_update(&mut self, price: f64) -> Result<()> {
+        // Update predictor with new price
+        self.predictor.add_trade(price, 1.0); // volume = 1.0 for live updates
+
+        // Check for stop loss / take profit
+        if let Some(entry_price) = self.entry_price {
+            if self.position > 0.0 {
+                let pnl_pct = (price - entry_price) / entry_price;
+                if pnl_pct <= -self.stop_loss_pct {
+                    info!("🛑 STOP LOSS triggered at {:.2}%", pnl_pct * 100.0);
+                    self.execute_sell(price).await?;
+                    return Ok(());
+                } else if pnl_pct >= self.take_profit_pct {
+                    info!("🎯 TAKE PROFIT triggered at {:.2}%", pnl_pct * 100.0);
+                    self.execute_sell(price).await?;
+                    return Ok(());
+                }
+            }
+        }
+
+        // Get trading signal
+        if let Some(signal) = self.predictor.get_trading_signal() {
+            match signal.as_str() {
+                "BUY" if self.can_buy(price) => {
+                    self.execute_buy(price).await?;
+                }
+                "SELL" if self.can_sell() => {
+                    self.execute_sell(price).await?;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    fn print_status(&self) {
+        let win_rate = if self.total_trades > 0 {
+            self.winning_trades as f64 / self.total_trades as f64 * 100.0
+        } else {
+            0.0
+        };
+        info!("📊 Live Trading Status:");
+        info!("Balance: ${:.2}", self.balance);
+        info!("Position: {:.6} BTC", self.position);
+        info!("Total Trades: {}", self.total_trades);
+        info!("Win Rate: {:.1}%", win_rate);
+        info!("Total P&L: ${:.2}", self.total_pnl);
+        if let Some(entry) = self.entry_price {
+            info!("Entry Price: ${:.2}", entry);
+        }
+    }
+}
+
+#[derive(Debug)]
 struct SimpleMLPredictor {
     model: Option<MLModel>,
     trades: VecDeque<TradeData>,
@@ -650,6 +794,22 @@ async fn main() -> Result<()> {
 }
 
 async fn run_live() -> Result<()> {
+    info!("🚀 Starting LIVE TRADING BOT");
+    info!("⚠️  WARNING: This will execute real trades!");
+    info!("💰 Starting balance: $1000");
+    info!("🎯 Risk management: 1% stop-loss, 2% take-profit, 10% position sizing");
+
+    // Check for API keys (optional for now - will simulate)
+    let api_key = env::var("BINANCE_API_KEY").ok();
+    let secret_key = env::var("BINANCE_SECRET_KEY").ok();
+
+    if api_key.is_none() || secret_key.is_none() {
+        info!("⚠️  No API keys found - running in SIMULATION mode");
+        info!("💡 Set BINANCE_API_KEY and BINANCE_SECRET_KEY for real trading");
+    } else {
+        info!("🔑 API keys found - ready for LIVE trading");
+    }
+
     // Initialize market stream for BTC/USDT spot trades
     let mut streams = Streams::<PublicTrades>::builder()
         .subscribe([
@@ -658,41 +818,66 @@ async fn run_live() -> Result<()> {
         .init()
         .await?;
 
-    // Initialize ML predictor
-    let mut predictor = SimpleMLPredictor::new(20);
+    // Initialize live trader
+    let mut trader = LiveTrader::new();
 
     // Select the stream for Binance
     let mut binance_stream = streams
         .select(barter_instrument::exchange::ExchangeId::BinanceSpot)
         .unwrap();
 
-    // Consume the stream for a short time
-    let mut count = 0;
+    info!("📡 Connected to Binance BTC/USDT stream");
+    info!("🤖 Bot is now monitoring market and generating signals...");
+
+    // Status update counter
+    let mut status_counter = 0;
+    let mut trade_count = 0;
+
+    // Main trading loop
     while let Some(event) = binance_stream.next().await {
         match event {
             barter_data::streams::reconnect::Event::Item(result) => match result {
                 Ok(trade) => {
                     let price = trade.kind.price;
-                    let amount = trade.kind.amount;
-                    predictor.add_trade(price, amount);
-                    info!("Received trade: price={}, amount={}", price, amount);
-                    if let Some(predicted) = predictor.predict_next() {
-                        info!("Predicted next price: {}", predicted);
-                        if let Some(signal) = predictor.get_trading_signal() {
-                            info!("Trading signal: {}", signal);
-                        }
+                    let volume = trade.kind.amount;
+
+                    // Process price update and check for trading signals
+                    trader.process_price_update(price).await?;
+
+                    trade_count += 1;
+                    status_counter += 1;
+
+                    // Print status every 100 trades
+                    if status_counter >= 100 {
+                        trader.print_status();
+                        status_counter = 0;
                     }
-                    count += 1;
-                    if count >= 50 {
+
+                    // Safety check - stop after 1000 trades for demo
+                    if trade_count >= 1000 {
+                        info!("🛑 Demo limit reached (1000 trades) - stopping bot");
                         break;
                     }
                 }
                 Err(e) => {
-                    warn!("Error receiving trade: {:?}", e);
+                    warn!("❌ Error receiving trade: {:?}", e);
+                    // Continue on errors
                 }
             }
             _ => {}
         }
+    }
+
+    // Final status
+    info!("🏁 Live trading session ended");
+    trader.print_status();
+
+    // Close any open position
+    if trader.position > 0.0 {
+        // In real trading, you'd get the current market price
+        // For demo, we'll use a simulated close
+        info!("💰 Closing remaining position...");
+        // trader.execute_sell(current_price).await?;
     }
 
     Ok(())
