@@ -1,0 +1,21 @@
+[package]
+name = "crypto-trading-bot-demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+barter = "0.12"
+barter-data = "0.10"
+barter-execution = "0.6"
+barter-instrument = "0.3"
+barter-integration = "0.9"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+linfa = "0.8"
+linfa-linear = "0.8"
+ndarray = "0.16"
+smartcore = { version = "0.4", features = ["ndarray-bindings"] }
+rand = "0.8"
