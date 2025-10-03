@@ -1,10 +1,110 @@
 use crate::ml::SimpleMLPredictor;
 use anyhow::Result;
 use tracing::info;
+use std::collections::VecDeque;
+
+#[derive(Debug)]
+pub struct PositionSizer {
+    pub base_risk_pct: f64, // Base risk per trade (e.g., 0.02 = 2%)
+    pub max_risk_pct: f64,  // Maximum risk per trade (e.g., 0.05 = 5%)
+    pub volatility_window: usize,
+    pub recent_trades: VecDeque<bool>, // true = win, false = loss
+    pub performance_window: usize,
+    pub kelly_fraction: f64, // Kelly criterion multiplier (0.5 = half Kelly)
+}
+
+impl PositionSizer {
+    pub fn new() -> Self {
+        Self {
+                base_risk_pct: 0.05,  // 5% base risk for better position sizes
+            max_risk_pct: 0.05,  // 5% max risk
+            volatility_window: 20,
+            recent_trades: VecDeque::with_capacity(20),
+            performance_window: 20,
+            kelly_fraction: 0.5, // Conservative Kelly
+        }
+    }
+
+    pub fn calculate_position_size(&self, balance: f64, price: f64, volatility: f64, confidence: f64) -> f64 {
+        // Base position size using risk percentage
+        let base_risk_amount = balance * self.base_risk_pct;
+        let mut position_value = base_risk_amount / price;
+
+        // Adjust for volatility (higher volatility = smaller position)
+        let volatility_adjustment = if volatility > 0.0 {
+            let normalized_volatility = (volatility * 100.0).min(20.0); // Cap at 20%
+            1.0 / (1.0 + normalized_volatility * 0.5) // Less aggressive reduction
+        } else {
+            1.0
+        };
+
+        // Adjust for recent performance using Kelly criterion approximation
+        let performance_adjustment = self.calculate_performance_multiplier();
+
+        // Adjust for signal confidence
+        let confidence_adjustment = 0.5 + (confidence * 0.5); // 0.5 to 1.0 based on confidence
+
+        // Apply all adjustments
+        position_value *= volatility_adjustment;
+        position_value *= performance_adjustment;
+        position_value *= confidence_adjustment;
+
+        // Cap at maximum risk
+        let max_position_value = balance * self.max_risk_pct;
+        let max_position_size = max_position_value / price;
+        position_value = position_value.min(max_position_size);
+
+        // Ensure minimum position size (0.001 BTC)
+        position_value.max(0.001)
+    }
+
+    fn calculate_performance_multiplier(&self) -> f64 {
+        if self.recent_trades.is_empty() {
+            return 1.0; // No adjustment if no history
+        }
+
+        let wins = self.recent_trades.iter().filter(|&&win| win).count();
+        let total = self.recent_trades.len();
+        let win_rate = wins as f64 / total as f64;
+
+        if win_rate > 0.6 {
+            // Good performance - can risk a bit more
+            1.2
+        } else if win_rate < 0.4 {
+            // Poor performance - reduce risk
+            0.7
+        } else {
+            1.0
+        }
+    }
+
+    pub fn record_trade_result(&mut self, was_win: bool) {
+        self.recent_trades.push_back(was_win);
+        if self.recent_trades.len() > self.performance_window {
+            self.recent_trades.pop_front();
+        }
+    }
+
+    pub fn get_current_volatility(&self, predictor: &SimpleMLPredictor) -> f64 {
+        predictor.calculate_volatility(self.volatility_window).unwrap_or(0.01)
+    }
+
+    pub fn get_signal_confidence(&self, predictor: &SimpleMLPredictor) -> f64 {
+        // Simple confidence based on how far prediction is from current price
+        if let (Some(current), Some(predicted)) = (predictor.trades.back(), predictor.predict_next()) {
+            let diff_pct = ((predicted - current.price) / current.price).abs();
+            // Higher confidence for larger predicted moves
+            (diff_pct * 10.0).min(1.0).max(0.1)
+        } else {
+            0.5 // Default confidence
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Backtester {
     pub predictor: SimpleMLPredictor,
+    pub position_sizer: PositionSizer,
     pub balance: f64,
     pub position: f64, // amount of BTC held
     pub entry_price: Option<f64>,
@@ -19,6 +119,7 @@ impl Backtester {
     pub fn new() -> Self {
         Self {
             predictor: SimpleMLPredictor::new(50), // increased window size
+            position_sizer: PositionSizer::new(),
             balance: 10000.0, // start with $10k
             position: 0.0,
             entry_price: None,
@@ -60,11 +161,15 @@ impl Backtester {
 
     pub fn buy(&mut self, price: f64) {
         if self.position == 0.0 && self.balance > 100.0 { // minimum balance
-            let trade_amount = self.balance * 0.1; // 10% of balance
+            let volatility = self.position_sizer.get_current_volatility(&self.predictor);
+            let confidence = self.position_sizer.get_signal_confidence(&self.predictor);
+            let position_size_pct = self.position_sizer.calculate_position_size(self.balance, price, volatility, confidence);
+            let trade_amount = self.balance * position_size_pct;
             self.position = trade_amount / price;
             self.entry_price = Some(price);
             self.balance -= trade_amount;
-            info!("BUY: {} BTC at ${}, position: {}, remaining balance: ${:.2}", self.position, price, self.position, self.balance);
+            info!("BUY: {} BTC at ${}, position: {}, remaining balance: ${:.2}, size: {:.2}% (vol: {:.4}, conf: {:.2})",
+                  self.position, price, self.position, self.balance, position_size_pct * 100.0, volatility, confidence);
         }
     }
 
@@ -78,6 +183,9 @@ impl Backtester {
             if pnl > 0.0 {
                 self.winning_trades += 1;
             }
+            // Record trade result for position sizing
+            let pnl_pct = pnl / (self.entry_price.unwrap() * self.position);
+            self.position_sizer.record_trade_result(pnl_pct > 0.0);
             info!("SELL: {} BTC at ${}, P&L: ${:.2}, Total P&L: ${:.2}", self.position, price, pnl, self.total_pnl);
             self.position = 0.0;
             self.entry_price = None;
@@ -98,6 +206,7 @@ impl Backtester {
 #[derive(Debug)]
 pub struct LiveTrader {
     pub predictor: SimpleMLPredictor,
+    pub position_sizer: PositionSizer,
     pub balance: f64,
     pub position: f64, // amount of BTC held
     pub entry_price: Option<f64>,
@@ -113,6 +222,7 @@ impl LiveTrader {
     pub fn new() -> Self {
         Self {
             predictor: SimpleMLPredictor::new(50),
+            position_sizer: PositionSizer::new(),
             balance: 1000.0, // start with $1k for safety
             position: 0.0,
             entry_price: None,
@@ -134,18 +244,21 @@ impl LiveTrader {
     }
 
     pub async fn execute_buy(&mut self, price: f64) -> Result<()> {
-        let max_position_value = self.balance * self.max_position_size_pct;
+        let volatility = self.position_sizer.get_current_volatility(&self.predictor);
+        let confidence = self.position_sizer.get_signal_confidence(&self.predictor);
+        let position_size_pct = self.position_sizer.calculate_position_size(self.balance, price, volatility, confidence);
+        let max_position_value = self.balance * position_size_pct.min(self.max_position_size_pct);
         let btc_to_buy = (max_position_value / price).min(self.balance / price);
 
-        if btc_to_buy * price < 10.0 {
+        if btc_to_buy * price < 1.0 {
             info!("Trade too small (${:.2}), skipping", btc_to_buy * price);
             return Ok(());
         }
 
         // Here you would execute the actual buy order
         // For now, we'll simulate it
-        info!("🚀 LIVE BUY: {:.6} BTC at ${:.2}, total: ${:.2}",
-              btc_to_buy, price, btc_to_buy * price);
+        info!("🚀 LIVE BUY: {:.6} BTC at ${:.2}, total: ${:.2}, size: {:.2}% (vol: {:.4}, conf: {:.2})",
+              btc_to_buy, price, btc_to_buy * price, position_size_pct * 100.0, volatility, confidence);
 
         self.position += btc_to_buy;
         self.balance -= btc_to_buy * price;
@@ -177,7 +290,10 @@ impl LiveTrader {
             if pnl > 0.0 {
                 self.winning_trades += 1;
             }
-            info!("Trade P&L: ${:.2} ({:.2}%)", pnl, (pnl / (btc_to_sell * entry)) * 100.0);
+            // Record trade result for position sizing
+            let pnl_pct = pnl / (btc_to_sell * entry);
+            self.position_sizer.record_trade_result(pnl_pct > 0.0);
+            info!("Trade P&L: ${:.2} ({:.2}%)", pnl, pnl_pct * 100.0);
         }
 
         self.entry_price = None;

@@ -127,7 +127,7 @@ impl SimpleMLPredictor {
         }
     }
 
-    fn calculate_volatility(&self, periods: usize) -> Option<f64> {
+    pub fn calculate_volatility(&self, periods: usize) -> Option<f64> {
         if self.trades.len() < periods {
             return None;
         }
@@ -173,15 +173,18 @@ impl SimpleMLPredictor {
         for i in 10..n-4 { // predict 3 trades ahead
             let _price = self.trades[i].price;
             let _volume = self.trades[i].volume;
-            // Use momentum and volatility features (avoiding price correlation)
-            let price_momentum = self.calculate_momentum_from_index(i-1, 5).unwrap_or(0.0); // longer momentum
+            // Use more robust features that work even in stable markets
+            let price_momentum = self.calculate_momentum_from_index(i-1, 5).unwrap_or(0.0);
             let volume_change = if i >= 2 {
                 (self.trades[i-1].volume - self.trades[i-2].volume) / self.trades[i-2].volume.max(1.0)
             } else { 0.0 };
-            let recent_volatility = self.calculate_volatility_from_index(i-1, 5).unwrap_or(0.0);
-            let sma_momentum = self.calculate_momentum_from_index(i-1, 10).unwrap_or(0.0); // even longer momentum
+            let recent_volatility = self.calculate_volatility_from_index(i-1, 10).unwrap_or(0.001);
 
-            features.push(vec![price_momentum, volume_change, recent_volatility, sma_momentum]);
+            // Only use RSI and MACD if we have enough data
+            let rsi = if i >= 14 { self.calculate_rsi_from_index(i-1, 14).unwrap_or(50.0) } else { 50.0 };
+            let macd = if i >= 26 { self.calculate_macd_from_index(i-1).unwrap_or(0.0) } else { 0.0 };
+
+            features.push(vec![price_momentum, volume_change, recent_volatility, rsi / 100.0, macd]);
             let future_price = self.trades[i+3].price; // predict 3 trades ahead
             let current_price = self.trades[i].price;
             let price_change = (future_price - current_price) / current_price;
@@ -207,9 +210,11 @@ impl SimpleMLPredictor {
         println!("Sample targets: {:.6}, {:.6}, {:.6}", targets[0], targets[1], targets[2]);
 
         // Check if we have sufficient variation in features
-        let has_variation = features.iter().any(|f| f.iter().any(|&v| v.abs() > 1e-6)); // increased threshold
-        if !has_variation {
-            println!("Market too stable for ML training - switching to random trading mode for testing");
+        let has_variation = features.iter().any(|f| f.iter().any(|&v| v.abs() > 0.01)); // Require more significant variation
+        let target_variation = targets.iter().any(|&t| t.abs() > 0.001); // Check if targets vary
+        if !has_variation || !target_variation {
+            println!("Market too stable for ML training (features: {}, targets: {}) - switching to random trading mode for testing",
+                    has_variation, target_variation);
             // Don't train model, but allow random trades for testing infrastructure
             return;
         }
@@ -442,7 +447,7 @@ impl SimpleMLPredictor {
             return None;
         }
         let multiplier = 2.0 / (period as f64 + 1.0);
-        let start_idx = end_idx - period + 1;
+        let start_idx = end_idx.saturating_sub(period - 1);
         if start_idx >= self.trades.len() {
             return None;
         }
@@ -543,7 +548,7 @@ impl SimpleMLPredictor {
             // No ML model - use random trading for testing
             use std::time::{SystemTime, UNIX_EPOCH};
             let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-            let random_signal = (timestamp % 100) < 5; // 5% chance of trade
+            let random_signal = (timestamp % 100) < 20; // 20% chance of trade for testing
 
             if random_signal {
                 // Return special signal for position-aware random trading
