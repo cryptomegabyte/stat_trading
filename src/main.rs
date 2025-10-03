@@ -129,17 +129,18 @@ async fn run_live() -> Result<()> {
 async fn run_backtest() -> Result<()> {
     info!("Fetching historical BTC/USD data from Kraken...");
 
-    // Fetch historical OHLC from Kraken (up to 7 days of 1-minute data)
+    // Fetch historical OHLC from Kraken (1 year of daily data)
     let client = reqwest::Client::new();
-    let mut last_time = 0u64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let now_seconds = now / 1000;
+    let mut last_time = now_seconds - 365 * 24 * 60 * 60; // 1 year ago
     let mut all_ohlc = Vec::new();
 
     loop {
-        let url = if last_time == 0 {
-            "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1".to_string()
-        } else {
-            format!("https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1&since={}", last_time)
-        };
+        let url = format!("https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1440&since={}", last_time);
         let response = client.get(&url).send().await?;
         let json: serde_json::Value = response.json().await?;
         
@@ -162,7 +163,7 @@ async fn run_backtest() -> Result<()> {
         }
         
         // Kraken returns up to 720 points per request, stop if less than that
-        if all_ohlc.len() >= 5000 || json["result"]["XXBTZUSD"].as_array().map_or(true, |a| a.len() < 720) {
+        if all_ohlc.len() >= 10000 || json["result"]["XXBTZUSD"].as_array().map_or(true, |a| a.len() < 720) {
             break;
         }
     }
@@ -174,7 +175,7 @@ async fn run_backtest() -> Result<()> {
         trades.push((close_price, volume));
     }
 
-    info!("Fetched {} historical trades from Kraken", trades.len());
+    info!("Fetched {} historical trades from Kraken (1 year of daily data)", trades.len());
 
     // Initialize backtester
     let mut backtester = Backtester::new();
