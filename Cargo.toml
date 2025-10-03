@@ -3,6 +3,14 @@ name = "crypto-trading-bot-demo"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "crypto_trading_bot_demo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "crypto-trading-bot-demo"
+path = "src/main.rs"
+
 [dependencies]
 barter = "0.12"
 barter-data = "0.10"

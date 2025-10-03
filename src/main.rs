@@ -1,6 +1,6 @@
-mod types;
-mod ml;
-mod trading;
+pub mod types;
+pub mod ml;
+pub mod trading;
 
 use anyhow::Result;
 use barter_data::exchange::binance::spot::BinanceSpot;
