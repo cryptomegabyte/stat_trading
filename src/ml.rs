@@ -480,16 +480,19 @@ impl SimpleMLPredictor {
             }
 
             // Use same features as training for prediction
-            let price_momentum = self.calculate_momentum_from_index(self.trades.len() - 2, 5).unwrap_or(0.0); // longer momentum
+            let price_momentum = self.calculate_momentum_from_index(self.trades.len() - 2, 5).unwrap_or(0.0);
             let volume_change = if self.trades.len() >= 3 {
                 let idx = self.trades.len() - 2;
                 (self.trades[idx].volume - self.trades[idx-1].volume) / self.trades[idx-1].volume.max(1.0)
             } else { 0.0 };
-            let recent_volatility = self.calculate_volatility_from_index(self.trades.len() - 2, 5).unwrap_or(0.0);
-            let sma_momentum = self.calculate_momentum_from_index(self.trades.len() - 2, 10).unwrap_or(0.0); // even longer momentum
+            let recent_volatility = self.calculate_volatility_from_index(self.trades.len() - 2, 10).unwrap_or(0.001);
+
+            // Only use RSI and MACD if we have enough data
+            let rsi = if self.trades.len() >= 15 { self.calculate_rsi_from_index(self.trades.len() - 2, 14).unwrap_or(50.0) } else { 50.0 };
+            let macd = if self.trades.len() >= 27 { self.calculate_macd_from_index(self.trades.len() - 2).unwrap_or(0.0) } else { 0.0 };
 
             // Raw features in same order as training
-            let raw_features = [price_momentum, volume_change, recent_volatility, sma_momentum];
+            let raw_features = [price_momentum, volume_change, recent_volatility, rsi / 100.0, macd];
 
             // Normalize features
             let mut normalized_features = Vec::new();
@@ -503,7 +506,7 @@ impl SimpleMLPredictor {
 
             match model {
                 MLModel::LinearRegression(lr_model) => {
-                    let input = Array2::from_shape_vec((1, 4), normalized_features).unwrap();
+                    let input = Array2::from_shape_vec((1, normalized_features.len()), normalized_features.clone()).unwrap();
                     let predicted_change = lr_model.predict(&input)[0];
                     let current_price = self.trades.back().unwrap().price;
                     Some(current_price * (1.0 + predicted_change))
