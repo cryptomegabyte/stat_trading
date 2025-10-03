@@ -223,7 +223,7 @@ impl LiveTrader {
         Self {
             predictor: SimpleMLPredictor::new(50),
             position_sizer: PositionSizer::new(),
-            balance: 1000.0, // start with $1k for safety
+            balance: 2000.0, // start with $2k for safety
             position: 0.0,
             entry_price: None,
             total_trades: 0,

@@ -104,7 +104,7 @@ mod e2e_tests {
         }
 
         // Verify trader state is reasonable
-        assert!(trader.balance >= 900.0, "Should have most balance remaining"); // Started with 1000
+        assert!(trader.balance >= 1800.0, "Should have most balance remaining"); // Started with 2000
         // Note: With dynamic position sizing, trades may be more conservative
         // assert!(trader.total_trades > 0, "Should have processed some trades");
 

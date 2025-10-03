@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
 async fn run_live() -> Result<()> {
     info!("🚀 Starting LIVE TRADING BOT");
     info!("⚠️  WARNING: This will execute real trades!");
-    info!("💰 Starting balance: $1000");
+    info!("💰 Starting balance: $2000");
     info!("🎯 Risk management: 1% stop-loss, 2% take-profit, 10% position sizing");
 
     // Check for API keys (optional for now - will simulate)
