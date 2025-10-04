@@ -289,7 +289,7 @@ impl SimpleMLPredictor {
             }
         }
         for std in &mut stds {
-            *std = ((*std / features.len() as f64)).sqrt();
+            *std = (*std / features.len() as f64).sqrt();
             if *std == 0.0 {
                 *std = 1.0; // Avoid division by zero
             }
@@ -584,7 +584,7 @@ impl SimpleMLPredictor {
         let price_acceleration = self.calculate_price_acceleration_from_index(self.trades.len() - 1, 5).unwrap_or(0.0);
 
         // Apply robust scaling and clipping to prevent outliers
-        let features = vec![
+        let features = [
             self.clip_and_scale(price_momentum, -0.1, 0.1), // Price momentum: clip to ±10%
             self.clip_and_scale(volume_change, -2.0, 2.0),  // Volume change: clip to ±200%
             self.clip_and_scale(recent_volatility, 0.0, 0.05), // Volatility: clip to 0-5%
@@ -603,7 +603,7 @@ impl SimpleMLPredictor {
             if i < self.feature_means.len() && i < self.feature_stds.len() && self.feature_stds[i] > 0.0 {
                 let normalized = (val - self.feature_means[i]) / self.feature_stds[i];
                 // Additional clipping of normalized values to prevent extreme outliers
-                normalized_features.push(normalized.max(-3.0).min(3.0));
+                normalized_features.push(normalized.clamp(-3.0, 3.0));
             } else {
                 normalized_features.push(val); // Fallback if normalization params not available
             }

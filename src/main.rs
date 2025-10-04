@@ -195,7 +195,7 @@ async fn fetch_pair_data(pair: &TradingPair) -> Result<Vec<(f64, f64)>> {
                     }
                     // Get last time for next request
                     if let Some(last) = ohlc_array.last() {
-                        if let Some(time_str) = last.as_array().and_then(|a| a.get(0)).and_then(|v| v.as_u64()) {
+                        if let Some(time_str) = last.as_array().and_then(|a| a.first()).and_then(|v| v.as_u64()) {
                             last_time = time_str;
                         }
                     }
@@ -204,7 +204,7 @@ async fn fetch_pair_data(pair: &TradingPair) -> Result<Vec<(f64, f64)>> {
         }
 
         // Kraken returns up to 720 points per request, stop if less than that
-        if all_ohlc.len() >= 720 || json["result"][pair.kraken_symbol()].as_array().map_or(true, |a| a.len() < 720) {
+        if all_ohlc.len() >= 720 || json["result"][pair.kraken_symbol()].as_array().is_none_or(|a| a.len() < 720) {
             break;
         }
     }

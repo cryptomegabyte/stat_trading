@@ -32,30 +32,10 @@ impl PositionSizer {
         }
     }
 
-    pub fn calculate_position_size(&self, balance: f64, price: f64, volatility: f64, confidence: f64) -> f64 {
+    pub fn calculate_position_size(&self, _balance: f64, _price: f64, _volatility: f64, _confidence: f64) -> f64 {
         // Return the full base risk percentage without any adjustments
         // This allows for maximum capital utilization per trade
         self.base_risk_pct
-    }
-
-    fn calculate_performance_multiplier(&self) -> f64 {
-        if self.recent_trades.is_empty() {
-            return 1.0; // No adjustment if no history
-        }
-
-        let wins = self.recent_trades.iter().filter(|&&win| win).count();
-        let total = self.recent_trades.len();
-        let win_rate = wins as f64 / total as f64;
-
-        if win_rate > 0.6 {
-            // Good performance - can risk a bit more
-            1.2
-        } else if win_rate < 0.4 {
-            // Poor performance - reduce risk
-            0.7
-        } else {
-            1.0
-        }
     }
 
     pub fn record_trade_result(&mut self, was_win: bool) {
@@ -74,7 +54,7 @@ impl PositionSizer {
         if let (Some(current), Some(predicted)) = (predictor.trades.back(), predictor.predict_next()) {
             let diff_pct = ((predicted - current.price) / current.price).abs();
             // Higher confidence for larger predicted moves
-            (diff_pct * 10.0).min(1.0).max(0.1)
+            (diff_pct * 10.0).clamp(0.1, 1.0)
         } else {
             0.5 // Default confidence
         }
@@ -214,7 +194,7 @@ impl PairTrader {
         
         // Combine short and medium term trends
         // Weight recent trend more heavily
-        (short_trend * 0.7 + medium_trend * 0.3).min(1.0).max(-1.0)
+        (short_trend * 0.7 + medium_trend * 0.3).clamp(-1.0, 1.0)
     }
 
     pub fn print_results(&self, pair: &TradingPair) {
