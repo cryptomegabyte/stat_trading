@@ -14,6 +14,12 @@ pub struct PositionSizer {
     pub kelly_fraction: f64, // Kelly criterion multiplier (0.5 = half Kelly)
 }
 
+impl Default for PositionSizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PositionSizer {
     pub fn new() -> Self {
         Self {
@@ -142,11 +148,10 @@ impl PairTrader {
                 if trend_strength > -0.2 || signal > buy_threshold {
                     self.buy(price, volume);
                 }
-            } else if signal < 0.0 && self.can_sell() {
-                if trend_strength < 0.2 || signal < sell_threshold {
+            } else if signal < 0.0 && self.can_sell()
+                && (trend_strength < 0.2 || signal < sell_threshold) {
                     self.sell(price);
                 }
-            }
         }
     }
 
@@ -234,6 +239,12 @@ pub struct Backtester {
     pub config: TradingConfig,
 }
 
+impl Default for Backtester {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Backtester {
     pub fn new() -> Self {
         let config = TradingConfig::default();
@@ -284,6 +295,12 @@ impl Backtester {
 pub struct LiveTrader {
     pub traders: HashMap<TradingPair, PairTrader>,
     pub config: TradingConfig,
+}
+
+impl Default for LiveTrader {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LiveTrader {

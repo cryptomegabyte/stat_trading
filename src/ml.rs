@@ -289,7 +289,7 @@ impl SimpleMLPredictor {
             }
         }
         for std in &mut stds {
-            *std = ((*std / features.len() as f64) as f64).sqrt();
+            *std = ((*std / features.len() as f64)).sqrt();
             if *std == 0.0 {
                 *std = 1.0; // Avoid division by zero
             }
