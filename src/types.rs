@@ -50,6 +50,7 @@ pub struct TradingConfig {
     pub stop_loss_pct: f64,
     pub take_profit_pct: f64,
     pub max_position_size_pct: f64,
+    pub leverage: f64,
 }
 
 impl Default for TradingConfig {
@@ -63,8 +64,9 @@ impl Default for TradingConfig {
             pairs,
             initial_balance,
             stop_loss_pct: 100.0,  // EXTREME: No stop-loss to give trades unlimited room
-            take_profit_pct: 0.50,  // Aggressive: 50% take profit for huge moves
-            max_position_size_pct: 1.0,  // EXTREME: 100% max position size for maximum capital utilization
+            take_profit_pct: 5.0,  // EXTREME: 500% take profit for massive gains
+            max_position_size_pct: 0.5,  // EXTREME: 50% max position size with leverage
+            leverage: 3.0,  // EXTREME: 3x leverage for amplified gains
         }
     }
 }

@@ -12,6 +12,7 @@ pub struct PositionSizer {
     pub recent_trades: VecDeque<bool>, // true = win, false = loss
     pub performance_window: usize,
     pub kelly_fraction: f64, // Kelly criterion multiplier (0.5 = half Kelly)
+    pub leverage: f64, // Leverage multiplier (e.g., 2.0 = 2x leverage)
 }
 
 impl Default for PositionSizer {
@@ -22,20 +23,25 @@ impl Default for PositionSizer {
 
 impl PositionSizer {
     pub fn new() -> Self {
+        Self::with_leverage(3.0) // Default 3x leverage
+    }
+
+    pub fn with_leverage(leverage: f64) -> Self {
         Self {
-                base_risk_pct: 1.0,  // Extremely aggressive: 100% base risk - risk entire balance per trade
-            max_risk_pct: 1.0,  // Very high: 100% max risk
+                base_risk_pct: 0.5,  // EXTREME: 50% base risk with leverage for controlled aggression
+            max_risk_pct: 0.5,  // Very high: 50% max risk
             volatility_window: 20,
             recent_trades: VecDeque::with_capacity(20),
             performance_window: 20,
-            kelly_fraction: 0.8, // More aggressive Kelly (was 0.5)
+            kelly_fraction: 1.0, // Full Kelly criterion for maximum aggression
+            leverage,
         }
     }
 
     pub fn calculate_position_size(&self, _balance: f64, _price: f64, _volatility: f64, _confidence: f64) -> f64 {
-        // Return the full base risk percentage without any adjustments
-        // This allows for maximum capital utilization per trade
-        self.base_risk_pct
+        // Return the full base risk percentage multiplied by leverage
+        // This allows for maximum capital utilization per trade with leverage amplification
+        self.base_risk_pct * self.leverage
     }
 
     pub fn record_trade_result(&mut self, was_win: bool) {
@@ -81,7 +87,7 @@ impl PairTrader {
     pub fn new(config: &TradingConfig, pair: TradingPair) -> Self {
         Self {
             predictor: SimpleMLPredictor::new(50),
-            position_sizer: PositionSizer::new(),
+            position_sizer: PositionSizer::with_leverage(config.leverage),
             balance: config.initial_balance, // Use the allocated balance per pair
             position: 0.0,
             entry_price: None,
@@ -152,16 +158,20 @@ impl PairTrader {
         // Use the full risk percentage without any adjustments for maximum capital utilization
         let adjusted_risk_pct = risk_pct.min(self.max_position_size_pct);
         
-        let position_value = self.balance * adjusted_risk_pct;
+        // Apply leverage to amplify position size
+        let leveraged_risk_pct = adjusted_risk_pct * self.position_sizer.leverage;
+        let position_value = self.balance * leveraged_risk_pct;
         let position_size = position_value / price;
 
         self.position = position_size;
         self.entry_price = Some(price);
-        self.balance -= position_size * price;
+        // With leverage, we don't deduct the full position value from balance
+        // Only deduct the margin required (position_value / leverage)
+        self.balance -= (position_size * price) / self.position_sizer.leverage;
         self.total_trades += 1;
 
-        info!("BUY: {:.6} units at ${}, position: {:.6}, remaining balance: ${:.2}, size: {:.1}% (vol: {:.3}, conf: {:.2})",
-              position_size, price, self.position, self.balance, adjusted_risk_pct * 100.0, volume, confidence);
+        info!("BUY: {:.6} units at ${}, position: {:.6}, remaining balance: ${:.2}, size: {:.1}% (vol: {:.3}, conf: {:.2}, leverage: {:.1}x)",
+              position_size, price, self.position, self.balance, leveraged_risk_pct * 100.0, volume, confidence, self.position_sizer.leverage);
     }
 
     pub fn sell(&mut self, price: f64) {
