@@ -261,12 +261,12 @@ mod e2e_tests {
     }
 
     #[test]
-    fn test_leverage_functionality() {
-        // Test that leverage amplifies position sizes and affects margin calculations
+    fn test_position_sizing_functionality() {
+        // Test that position sizing works correctly for spot trading
         let mut backtester = Backtester::new();
         let pair = TradingPair::BNB;
 
-        // Manually trigger a buy to test leverage calculations
+        // Manually trigger a buy to test position sizing calculations
         if let Some(trader) = backtester.traders.get_mut(&pair) {
             let initial_balance = trader.balance;
             let price = 50000.0;
@@ -274,29 +274,27 @@ mod e2e_tests {
             // Simulate a buy signal by calling buy directly
             trader.buy(price, 1.0);
 
-            // With 3x leverage and 50% position size, position should be amplified
-            let expected_position_value = initial_balance * 0.5 * 3.0; // 50% risk * 3x leverage
+            // With 50% position sizing (no leverage), position should be half of available balance
+            let expected_position_value = initial_balance * 0.5; // 50% of balance
             let expected_position_size = expected_position_value / price;
 
-            assert_eq!(trader.position, expected_position_size, "Position size should be leveraged");
+            assert_eq!(trader.position, expected_position_size, "Position size should be 50% of balance");
 
-            // Balance should be reduced by margin requirement (position_value / leverage)
-            let margin_required = expected_position_value / 3.0;
-            let expected_balance = initial_balance - margin_required;
+            // Balance should be reduced by the full position value (spot trading)
+            let expected_balance = initial_balance - expected_position_value;
 
-            assert!((trader.balance - expected_balance).abs() < 0.01, "Balance should reflect margin requirement");
+            assert!((trader.balance - expected_balance).abs() < 0.01, "Balance should be reduced by full position value");
 
-            // Test that leverage affects P&L calculations
+            // Test that P&L calculations work correctly
             let sell_price = 60000.0; // 20% gain
             trader.sell(sell_price);
 
-            // P&L should be amplified by leverage
-            let price_gain_pct = (sell_price - price) / price;
-            let expected_pnl = expected_position_value * price_gain_pct;
+            // P&L should be the price difference times position size
+            let expected_pnl = (sell_price - price) * expected_position_size;
 
-            assert!((trader.total_pnl - expected_pnl).abs() < 0.01, "P&L should be amplified by leverage");
+            assert!((trader.total_pnl - expected_pnl).abs() < 0.01, "P&L should be price difference times position size");
 
-            println!("Leverage test: Position {:.6}, Balance ${:.2}, P&L ${:.2}",
+            println!("Position sizing test: Position {:.6}, Balance ${:.2}, P&L ${:.2}",
                     trader.position, trader.balance, trader.total_pnl);
         }
     }

@@ -55,18 +55,18 @@ pub struct TradingConfig {
 
 impl Default for TradingConfig {
     fn default() -> Self {
-        // Focus on top 2 performing pairs: XRP and BNB
+        // Focus on top performing pair: BNB for spot trading
         let pairs = vec![TradingPair::BNB];
         let total_balance = 2000.0;
         let initial_balance = total_balance / pairs.len() as f64;
-        
+
         Self {
             pairs,
             initial_balance,
             stop_loss_pct: 100.0,  // EXTREME: No stop-loss to give trades unlimited room
             take_profit_pct: 5.0,  // EXTREME: 500% take profit for massive gains
-            max_position_size_pct: 0.5,  // EXTREME: 50% max position size with leverage
-            leverage: 3.0,  // EXTREME: 3x leverage for amplified gains
+            max_position_size_pct: 0.5,  // EXTREME: 50% max position size for aggressive capital utilization
+            leverage: 1.0,  // SPOT TRADING: No leverage (1.0 = no amplification)
         }
     }
 }

@@ -23,12 +23,12 @@ impl Default for PositionSizer {
 
 impl PositionSizer {
     pub fn new() -> Self {
-        Self::with_leverage(3.0) // Default 3x leverage
+        Self::with_leverage(1.0) // Spot trading: no leverage
     }
 
     pub fn with_leverage(leverage: f64) -> Self {
         Self {
-                base_risk_pct: 0.5,  // EXTREME: 50% base risk with leverage for controlled aggression
+                base_risk_pct: 0.5,  // EXTREME: 50% base risk for aggressive spot trading
             max_risk_pct: 0.5,  // Very high: 50% max risk
             volatility_window: 20,
             recent_trades: VecDeque::with_capacity(20),
@@ -39,9 +39,9 @@ impl PositionSizer {
     }
 
     pub fn calculate_position_size(&self, _balance: f64, _price: f64, _volatility: f64, _confidence: f64) -> f64 {
-        // Return the full base risk percentage multiplied by leverage
-        // This allows for maximum capital utilization per trade with leverage amplification
-        self.base_risk_pct * self.leverage
+        // For spot trading: return the base risk percentage (no leverage)
+        // This gives the actual percentage of balance to risk per trade
+        self.base_risk_pct
     }
 
     pub fn record_trade_result(&mut self, was_win: bool) {
@@ -152,26 +152,22 @@ impl PairTrader {
     pub fn buy(&mut self, price: f64, volume: f64) {
         let volatility = self.position_sizer.get_current_volatility(&self.predictor);
         let confidence = self.position_sizer.get_signal_confidence(&self.predictor);
-        
+
         let risk_pct = self.position_sizer.calculate_position_size(self.balance, price, volatility, confidence);
-        
-        // Use the full risk percentage without any adjustments for maximum capital utilization
+
+        // Use the risk percentage, capped at max position size
         let adjusted_risk_pct = risk_pct.min(self.max_position_size_pct);
-        
-        // Apply leverage to amplify position size
-        let leveraged_risk_pct = adjusted_risk_pct * self.position_sizer.leverage;
-        let position_value = self.balance * leveraged_risk_pct;
+        let position_value = self.balance * adjusted_risk_pct;
         let position_size = position_value / price;
 
         self.position = position_size;
         self.entry_price = Some(price);
-        // With leverage, we don't deduct the full position value from balance
-        // Only deduct the margin required (position_value / leverage)
-        self.balance -= (position_size * price) / self.position_sizer.leverage;
+        // In spot trading, deduct the full position value from balance
+        self.balance -= position_size * price;
         self.total_trades += 1;
 
-        info!("BUY: {:.6} units at ${}, position: {:.6}, remaining balance: ${:.2}, size: {:.1}% (vol: {:.3}, conf: {:.2}, leverage: {:.1}x)",
-              position_size, price, self.position, self.balance, leveraged_risk_pct * 100.0, volume, confidence, self.position_sizer.leverage);
+        info!("BUY: {:.6} units at ${}, position: {:.6}, remaining balance: ${:.2}, size: {:.1}% (vol: {:.3}, conf: {:.2})",
+              position_size, price, self.position, self.balance, adjusted_risk_pct * 100.0, volume, confidence);
     }
 
     pub fn sell(&mut self, price: f64) {
