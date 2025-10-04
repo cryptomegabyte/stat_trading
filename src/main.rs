@@ -11,6 +11,7 @@ use futures::StreamExt;
 use std::env;
 use tracing::{info, warn, Level};
 use trading::{Backtester, LiveTrader};
+use types::TradingPair;
 
 
 
@@ -38,10 +39,11 @@ async fn main() -> Result<()> {
 }
 
 async fn run_live() -> Result<()> {
-    info!("🚀 Starting LIVE TRADING BOT");
+    info!("🚀 Starting MULTI-PAIR LIVE TRADING BOT");
     info!("⚠️  WARNING: This will execute real trades!");
-    info!("💰 Starting balance: $2000");
-    info!("🎯 Risk management: 1% stop-loss, 2% take-profit, 10% position sizing");
+    info!("💰 Starting balance: $2000 total (shared between all pairs)");
+    info!("🎯 Risk management: 1.5% stop-loss, 4% take-profit, 10% position sizing");
+    info!("📊 Trading pairs: XRP, BNB");
 
     // Check for API keys (optional for now - will simulate)
     let api_key = env::var("BINANCE_API_KEY").ok();
@@ -54,11 +56,14 @@ async fn run_live() -> Result<()> {
         info!("🔑 API keys found - ready for LIVE trading");
     }
 
-    // Initialize market stream for BTC/USDT spot trades
+    // Initialize market streams for top performing pairs
+    let subscriptions: Vec<_> = vec![
+        (BinanceSpot::default(), "xrp", "usdt", MarketDataInstrumentKind::Spot, PublicTrades),
+        (BinanceSpot::default(), "bnb", "usdt", MarketDataInstrumentKind::Spot, PublicTrades),
+    ];
+
     let mut streams = Streams::<PublicTrades>::builder()
-        .subscribe([
-            (BinanceSpot::default(), "btc", "usdt", MarketDataInstrumentKind::Spot, PublicTrades),
-        ])
+        .subscribe(subscriptions)
         .init()
         .await?;
 
@@ -70,8 +75,8 @@ async fn run_live() -> Result<()> {
         .select(barter_instrument::exchange::ExchangeId::BinanceSpot)
         .unwrap();
 
-    info!("📡 Connected to Binance BTC/USDT stream");
-    info!("🤖 Bot is now monitoring market and generating signals...");
+    info!("📡 Connected to Binance streams for XRP, BNB");
+    info!("🤖 Bot is now monitoring markets and generating signals...");
 
     // Status update counter
     let mut status_counter = 0;
@@ -83,23 +88,30 @@ async fn run_live() -> Result<()> {
             match result {
                 Ok(trade) => {
                     let price = trade.kind.price;
-                    let _volume = trade.kind.amount;
+                    let volume = trade.kind.amount;
+
+                    // Identify which pair this trade is for
+                    let pair = match trade.instrument.base.to_string().as_str() {
+                        "xrp" => TradingPair::XRP,
+                        "bnb" => TradingPair::BNB,
+                        _ => continue, // Skip unknown pairs
+                    };
 
                     // Process price update and check for trading signals
-                    trader.process_price_update(price).await?;
+                    trader.process_price_update(&pair, price, volume).await?;
 
                     trade_count += 1;
                     status_counter += 1;
 
-                    // Print status every 100 trades
-                    if status_counter >= 100 {
+                    // Print status every 500 trades (less frequent with multiple pairs)
+                    if status_counter >= 500 {
                         trader.print_status();
                         status_counter = 0;
                     }
 
-                    // Safety check - stop after 1000 trades for demo
-                    if trade_count >= 1000 {
-                        info!("🛑 Demo limit reached (1000 trades) - stopping bot");
+                    // Safety check - stop after 5000 trades for demo (5x more with 5 pairs)
+                    if trade_count >= 5000 {
+                        info!("🛑 Demo limit reached (5000 trades) - stopping bot");
                         break;
                     }
                 }
@@ -115,21 +127,50 @@ async fn run_live() -> Result<()> {
     info!("🏁 Live trading session ended");
     trader.print_status();
 
-    // Close any open position
-    if trader.position > 0.0 {
-        // In real trading, you'd get the current market price
-        // For demo, we'll use a simulated close
-        info!("💰 Closing remaining position...");
-        // trader.execute_sell(current_price).await?;
-    }
+    // Note: In multi-pair trading, positions are managed per pair
+    // No single position to close at the end
 
     Ok(())
 }
 
 async fn run_backtest() -> Result<()> {
-    info!("Fetching historical BTC/USD data from Kraken...");
+    info!("🚀 Starting MULTI-PAIR BACKTEST");
+    info!("📊 Testing pairs: XRP, BNB");
+    info!("📅 1 year of hourly data from Kraken");
 
-    // Fetch historical OHLC from Kraken (1 year of daily data)
+    // Initialize backtester
+    let mut backtester = Backtester::new();
+
+    // Fetch data for each pair
+    let pairs = backtester.config.pairs.clone(); // Clone to avoid borrowing issues
+    for pair in &pairs {
+        info!("📡 Fetching {} data from Kraken...", pair.symbol().to_uppercase());
+
+        let pair_data = fetch_pair_data(pair).await?;
+        info!("✅ Fetched {} data points for {}", pair_data.len(), pair.symbol().to_uppercase());
+
+        // Process trades for this pair
+        for (price, volume) in &pair_data {
+            backtester.process_trade(pair, *price, *volume);
+        }
+
+        // Close any open position for this pair at market close
+        if let Some(trader) = backtester.traders.get_mut(pair) {
+            if trader.position > 0.0 {
+                let last_price = pair_data.last().unwrap().0;
+                trader.sell(last_price);
+                info!("💰 Closed {} position at end of backtest at ${}", pair.symbol().to_uppercase(), last_price);
+            }
+        }
+    }
+
+    // Print results
+    backtester.print_results();
+
+    Ok(())
+}
+
+async fn fetch_pair_data(pair: &TradingPair) -> Result<Vec<(f64, f64)>> {
     let client = reqwest::Client::new();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -140,13 +181,13 @@ async fn run_backtest() -> Result<()> {
     let mut all_ohlc = Vec::new();
 
     loop {
-        let url = format!("https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1440&since={}", last_time);
+        let url = format!("https://api.kraken.com/0/public/OHLC?pair={}&interval=60&since={}", pair.kraken_pair(), last_time);
         let response = client.get(&url).send().await?;
         let json: serde_json::Value = response.json().await?;
-        
+
         if let Some(result) = json["result"].as_object() {
-            if let Some(xbtusd) = result.get("XXBTZUSD") {
-                if let Some(ohlc_array) = xbtusd.as_array() {
+            if let Some(pair_data) = result.get(pair.kraken_symbol()) {
+                if let Some(ohlc_array) = pair_data.as_array() {
                     for ohlc in ohlc_array {
                         if let Some(arr) = ohlc.as_array() {
                             all_ohlc.push(arr.clone());
@@ -161,9 +202,9 @@ async fn run_backtest() -> Result<()> {
                 }
             }
         }
-        
+
         // Kraken returns up to 720 points per request, stop if less than that
-        if all_ohlc.len() >= 10000 || json["result"]["XXBTZUSD"].as_array().map_or(true, |a| a.len() < 720) {
+        if all_ohlc.len() >= 720 || json["result"][pair.kraken_symbol()].as_array().map_or(true, |a| a.len() < 720) {
             break;
         }
     }
@@ -175,30 +216,5 @@ async fn run_backtest() -> Result<()> {
         trades.push((close_price, volume));
     }
 
-    info!("Fetched {} historical trades from Kraken (1 year of daily data)", trades.len());
-
-    // Initialize backtester
-    let mut backtester = Backtester::new();
-
-    // Now backtest on collected trades
-    let prices: Vec<f64> = trades.iter().map(|(p, _)| *p).collect();
-    let min_price = prices.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-    let max_price = prices.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-    println!("Historical data: {} points, price range: {:.2} - {:.2}", trades.len(), min_price, max_price);
-    
-    for (price, amount) in &trades {
-        backtester.process_trade(*price, *amount);
-    }
-
-    // Close any open position at market close
-    if backtester.position > 0.0 {
-        let last_price = trades.last().unwrap().0;
-        backtester.sell(last_price);
-        info!("Closed position at end of backtest at ${}", last_price);
-    }
-
-    // Print results
-    backtester.print_results();
-
-    Ok(())
+    Ok(trades)
 }
