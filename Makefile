@@ -1,5 +1,13 @@
 # Crypto Trading Bot Demo - Makefile
-# A comprehensive build and development automation tool
+# A comprehensi# Running the bot
+run-paper:
+	@echo "📈 Starting paper trading simulation..."
+	cargo run -- --mode paper --model gas_vg
+
+run-live:
+	@echo "🚀 Starting live trading (ensure API keys are set)..."
+	@echo "⚠️  WARNING: This will execute real trades!"
+	cargo run -- --mode liveand development automation tool
 
 .PHONY: help build release test clippy clean run-paper run-live run-backtest format check-all install-deps docs
 

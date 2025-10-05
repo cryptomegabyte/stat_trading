@@ -59,8 +59,13 @@ pub struct TradingConfig {
 
 impl Default for TradingConfig {
     fn default() -> Self {
-           // Focus on top performing pairs: BTC, SOL, XRP, LTC for live trading
-           let pairs = vec![TradingPair::BTC, TradingPair::SOL, TradingPair::XRP, TradingPair::LTC];
+        // Focus on top performing pairs: BTC, SOL, XRP, LTC for live trading
+        let pairs = vec![
+            TradingPair::BTC,
+            TradingPair::SOL,
+            TradingPair::XRP,
+            TradingPair::LTC,
+        ];
         let total_balance = 2000.0;
         let initial_balance = total_balance / pairs.len() as f64;
 

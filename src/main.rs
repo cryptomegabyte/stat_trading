@@ -51,14 +51,37 @@ async fn run_paper_trading(model_type: String) -> Result<()> {
     info!("🤖 Using model: {}", model_type);
     info!("⚠️  NO REAL MONEY - This is for testing and learning only");
 
-    // Initialize Kraken WebSocket streams for top performing pairs
-    let pairs = vec!["XBT/USD".to_string(), "XRP/USD".to_string()];
-    let mut kraken_stream = KrakenStream::connect(pairs).await?;
+    // Get pairs from TradingConfig to ensure consistency
+    let config = types::TradingConfig::default();
+    let pairs: Vec<String> = config
+        .pairs
+        .iter()
+        .map(|pair| pair.kraken_pair().to_string())
+        .collect();
+
+    info!(
+        "Trading pairs: {}",
+        pairs
+            .iter()
+            .map(|p| p.split('/').next().unwrap_or(p))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // Initialize Kraken WebSocket streams for configured pairs
+    let mut kraken_stream = KrakenStream::connect(pairs.clone()).await?;
 
     // Initialize paper trader with specified model
     let mut trader = LiveTrader::new_with_model(&model_type);
 
-    info!("📡 Connected to Kraken streams for XBT, XRP (PAPER TRADING)");
+    info!(
+        "📡 Connected to Kraken streams for {} (PAPER TRADING)",
+        pairs
+            .iter()
+            .map(|p| p.split('/').next().unwrap_or(p))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     info!("🤖 Bot is now monitoring markets and generating signals...");
 
     // Status update counter
@@ -75,7 +98,9 @@ async fn run_paper_trading(model_type: String) -> Result<()> {
                 // Identify which pair this trade is for
                 let pair = match trade.pair.as_str() {
                     "XBT/USD" => TradingPair::BTC,
+                    "SOL/USD" => TradingPair::SOL,
                     "XRP/USD" => TradingPair::XRP,
+                    "LTC/USD" => TradingPair::LTC,
                     _ => continue, // Skip unknown pairs
                 };
 
@@ -116,7 +141,23 @@ async fn run_live() -> Result<()> {
     info!("⚠️  WARNING: This will execute real trades!");
     info!("💰 Starting balance: $2000 total (shared between all pairs)");
     info!("🎯 Risk management: 1.5% stop-loss, 4% take-profit, 10% position sizing");
-    info!("Trading pairs: XRP, BNB");
+
+    // Get pairs from TradingConfig to ensure consistency
+    let config = types::TradingConfig::default();
+    let pairs: Vec<String> = config
+        .pairs
+        .iter()
+        .map(|pair| pair.kraken_pair().to_string())
+        .collect();
+
+    info!(
+        "Trading pairs: {}",
+        pairs
+            .iter()
+            .map(|p| p.split('/').next().unwrap_or(p))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     // Check for API keys (optional for now - will simulate)
     let api_key = env::var("KRAKEN_API_KEY").ok();
@@ -129,14 +170,20 @@ async fn run_live() -> Result<()> {
         info!("🔑 API keys found - ready for LIVE trading");
     }
 
-    // Initialize Kraken WebSocket streams for top performing pairs
-    let pairs = vec!["XBT/USD".to_string(), "XRP/USD".to_string()];
-    let mut kraken_stream = KrakenStream::connect(pairs).await?;
+    // Initialize Kraken WebSocket streams for configured pairs
+    let mut kraken_stream = KrakenStream::connect(pairs.clone()).await?;
 
     // Initialize live trader
     let mut trader = LiveTrader::new();
 
-    info!("📡 Connected to Kraken streams for BTC, XRP");
+    info!(
+        "📡 Connected to Kraken streams for {}",
+        pairs
+            .iter()
+            .map(|p| p.split('/').next().unwrap_or(p))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     info!("🤖 Bot is now monitoring markets and generating signals...");
 
     // Status update counter
@@ -153,7 +200,9 @@ async fn run_live() -> Result<()> {
                 // Identify which pair this trade is for
                 let pair = match trade.pair.as_str() {
                     "XBT/USD" => TradingPair::BTC,
+                    "SOL/USD" => TradingPair::SOL,
                     "XRP/USD" => TradingPair::XRP,
+                    "LTC/USD" => TradingPair::LTC,
                     _ => continue, // Skip unknown pairs
                 };
 
