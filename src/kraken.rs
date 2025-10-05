@@ -41,20 +41,8 @@ struct KrakenEventMessage {
 struct KrakenTradeMessage(Vec<serde_json::Value>);
 
 impl KrakenTradeMessage {
-    fn channel_id(&self) -> Option<u32> {
-        self.0.get(0)?.as_u64().map(|v| v as u32)
-    }
-
     fn trades(&self) -> Option<&Vec<serde_json::Value>> {
         self.0.get(1)?.as_array()
-    }
-
-    fn channel(&self) -> Option<&str> {
-        self.0.get(2)?.as_str()
-    }
-
-    fn pair(&self) -> Option<&str> {
-        self.0.get(3)?.as_str()
     }
 }
 
