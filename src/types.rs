@@ -37,12 +37,12 @@ impl TradingPair {
 
     pub fn kraken_pair(&self) -> &'static str {
         match self {
-            TradingPair::BTC => "XBTUSD",
-            TradingPair::ETH => "ETHUSD",
-            TradingPair::XRP => "XRPUSD",
-            TradingPair::SOL => "SOLUSD",
-            TradingPair::BNB => "BNBUSD",
-            TradingPair::LTC => "LTCUSD",
+            TradingPair::BTC => "XBT/USD",
+            TradingPair::ETH => "ETH/USD",
+            TradingPair::XRP => "XRP/USD",
+            TradingPair::SOL => "SOL/USD",
+            TradingPair::BNB => "BNB/USD",
+            TradingPair::LTC => "LTC/USD",
         }
     }
 }

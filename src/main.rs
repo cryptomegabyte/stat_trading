@@ -75,7 +75,7 @@ async fn run_paper_trading(model_type: String, max_trades: u64) -> Result<()> {
         "Trading pairs: {}",
         pairs
             .iter()
-            .map(|p| p.split('/').next().unwrap_or(p))
+            .map(|p| p.replace("/", ""))
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -166,7 +166,7 @@ async fn run_live(max_trades: u64) -> Result<()> {
         "Trading pairs: {}",
         pairs
             .iter()
-            .map(|p| p.split('/').next().unwrap_or(p))
+            .map(|p| p.replace("/", ""))
             .collect::<Vec<_>>()
             .join(", ")
     );

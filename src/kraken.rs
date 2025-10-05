@@ -38,15 +38,24 @@ struct KrakenEventMessage {
 
 #[derive(Deserialize, Debug)]
 #[allow(dead_code)]
-struct KrakenTradeMessage {
-    #[serde(rename = "0")] // First element is the channel ID
-    channel_id: u32,
-    #[serde(rename = "1")] // Second element is the trade data array
-    trades: Vec<Vec<serde_json::Value>>,
-    #[serde(rename = "2")] // Third element is the channel name
-    channel: String,
-    #[serde(rename = "3")] // Fourth element is the pair
-    pair: String,
+struct KrakenTradeMessage(Vec<serde_json::Value>);
+
+impl KrakenTradeMessage {
+    fn channel_id(&self) -> Option<u32> {
+        self.0.get(0)?.as_u64().map(|v| v as u32)
+    }
+
+    fn trades(&self) -> Option<&Vec<serde_json::Value>> {
+        self.0.get(1)?.as_array()
+    }
+
+    fn channel(&self) -> Option<&str> {
+        self.0.get(2)?.as_str()
+    }
+
+    fn pair(&self) -> Option<&str> {
+        self.0.get(3)?.as_str()
+    }
 }
 
 pub struct KrakenStream {
@@ -110,25 +119,32 @@ impl KrakenStream {
     }
 
     async fn process_message(text: &str, pair: &str) -> Option<Result<KrakenTrade>> {
+
         // Try to parse as trade message
         if let Ok(trade_msg) = serde_json::from_str::<KrakenTradeMessage>(text) {
-            if let Some(trade_data) = trade_msg.trades.first() {
-                if trade_data.len() >= 6 {
-                    // Kraken trade format: [price, volume, time, side, order_type, misc]
-                    if let (Some(price_str), Some(volume_str), Some(time_str)) = (
-                        trade_data[0].as_str(),
-                        trade_data[1].as_str(),
-                        trade_data[2].as_f64(),
-                    ) {
-                        if let (Ok(price), Ok(volume)) =
-                            (price_str.parse::<f64>(), volume_str.parse::<f64>())
-                        {
-                            return Some(Ok(KrakenTrade {
-                                price,
-                                volume,
-                                timestamp: (time_str * 1000.0) as u64, // Convert to milliseconds
-                                pair: pair.to_string(),
-                            }));
+            if let Some(trade_data_array) = trade_msg.trades() {
+                for trade_data in trade_data_array {
+                    if let Some(trade_array) = trade_data.as_array() {
+                        if trade_array.len() >= 6 {
+                            // Kraken trade format: [price, volume, time, side, order_type, misc]
+                            if let (Some(price_str), Some(volume_str), Some(time_str)) = (
+                                trade_array[0].as_str(),
+                                trade_array[1].as_str(),
+                                trade_array[2].as_str(), // Time is a string, not f64
+                            ) {
+                                if let (Ok(price), Ok(volume)) =
+                                    (price_str.parse::<f64>(), volume_str.parse::<f64>())
+                                {
+                                    if let Ok(time_val) = time_str.parse::<f64>() {
+                                        return Some(Ok(KrakenTrade {
+                                            price,
+                                            volume,
+                                            timestamp: (time_val * 1000.0) as u64, // Convert to milliseconds
+                                            pair: pair.to_string(),
+                                        }));
+                                    }
+                                }
+                            }
                         }
                     }
                 }

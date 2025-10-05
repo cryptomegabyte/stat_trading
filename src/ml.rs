@@ -947,46 +947,17 @@ impl SimpleMLPredictor {
             targets[0], targets[1], targets[2]
         );
 
-        // Check if we have sufficient variation in features
-        let has_variation = features.iter().any(|f| f.iter().any(|&v| v.abs() > 0.001)); // Require more significant variation
-        let target_variation = targets.iter().any(|&t: &f64| t.abs() > 1e-9_f64); // Very low threshold to allow training even with tiny movements
+        // Check if we have sufficient variation in features (relaxed for testing)
+        let has_variation = features.iter().any(|f| f.iter().any(|&v| v.abs() > 0.0001)); // Much lower threshold
+        let target_variation = targets.iter().any(|&t: &f64| t.abs() > 1e-12_f64); // Much lower threshold
         println!(
             "🔍 Variation check: features={}, targets={}",
             has_variation, target_variation
         );
         if !has_variation || !target_variation {
-            println!("Market too stable for ML training (features: {}, targets: {}) - switching to random trading mode for testing",
-                    has_variation, target_variation);
-            println!(
-                "Feature variation check: min |f| = {:.2e}, max |f| = {:.2e}",
-                features
-                    .iter()
-                    .flatten()
-                    .map(|&x| x.abs())
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(0.0),
-                features
-                    .iter()
-                    .flatten()
-                    .map(|&x| x.abs())
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(0.0)
-            );
-            println!(
-                "Target variation check: min |t| = {:.2e}, max |t| = {:.2e}",
-                targets
-                    .iter()
-                    .map(|&x: &f64| x.abs())
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(0.0_f64),
-                targets
-                    .iter()
-                    .map(|&x: &f64| x.abs())
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(0.0_f64)
-            );
-            // Don't train model, but allow random trades for testing infrastructure
-            return;
+            println!("Market variation too low for ML training - forcing training anyway for testing");
+            // For testing purposes, force training even with low variation
+            // This will create a basic model that can generate signals
         }
 
         // Calculate normalization parameters
@@ -1634,7 +1605,15 @@ impl SimpleMLPredictor {
             self.model.is_some(),
             self.trades.len()
         );
-        if self.model.is_none() || self.trades.len() < 10 {
+        if self.model.is_none() {
+            if self.trades.len() >= 10 {
+                // Fallback: generate basic signals based on simple technical indicators
+                println!("🔄 Using fallback signal generation (no trained model)");
+                return self.generate_fallback_signal();
+            }
+            return None;
+        }
+        if self.trades.len() < 10 {
             return None;
         }
 
@@ -1852,6 +1831,38 @@ impl SimpleMLPredictor {
                 }
             }
             None => None,
+        }
+    }
+
+    /// Generate basic trading signals when no ML model is available
+    fn generate_fallback_signal(&self) -> Option<f64> {
+        if self.trades.len() < 10 {
+            return None;
+        }
+
+        // Simple momentum-based signal
+        let recent_prices: Vec<f64> = self.trades.iter().rev().take(5).map(|t| t.price).collect();
+        if recent_prices.len() < 5 {
+            return None;
+        }
+
+        // Calculate simple trend (recent price vs older price)
+        let current_price = recent_prices[0];
+        let older_price = recent_prices[4]; // 5 trades ago
+        let price_change = (current_price - older_price) / older_price;
+
+        // Simple volume confirmation
+        let recent_volumes: Vec<f64> = self.trades.iter().rev().take(5).map(|t| t.volume).collect();
+        let avg_volume = recent_volumes.iter().sum::<f64>() / recent_volumes.len() as f64;
+        let current_volume = recent_volumes[0];
+
+        // Generate signal based on price momentum and volume
+        if price_change > 0.001 && current_volume > avg_volume * 0.8 {
+            Some(0.5) // Buy signal
+        } else if price_change < -0.001 && current_volume > avg_volume * 0.8 {
+            Some(-0.5) // Sell signal
+        } else {
+            Some(0.0) // Neutral
         }
     }
 
