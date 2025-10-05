@@ -5,10 +5,11 @@ use smartcore::linalg::basic::arrays::Array;
 use linfa::prelude::*;
 use linfa_linear::LinearRegression;
 use ndarray::{Array1, Array2};
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashMap};
 use std::time::{SystemTime, UNIX_EPOCH};
 use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
 use special::Gamma; // For special functions in heavy-tailed distributions
+use crate::trading::ModelPerformance;
 
 /// Heavy-tailed distribution trait for GAS models
 pub trait HeavyTailedDistribution {
@@ -498,6 +499,17 @@ impl GASModel {
         }
 
         forecasts
+    }
+}
+
+impl ModelPredictor for GASModel {
+    fn predict(&self, _current_price: f64, _features: &[f64]) -> Option<f64> {
+        // For GAS models, return a volatility-based signal
+        let volatility = self.get_volatility();
+        // Lower volatility suggests upward movement, higher suggests caution
+        // Reduced signal strength for better ensemble balance
+        let signal = if volatility < 0.02 { 0.4 } else if volatility > 0.05 { -0.4 } else { 0.0 };
+        Some(signal)
     }
 }
 
@@ -1094,6 +1106,37 @@ impl SimpleMLPredictor {
                 println!("✅ GAS-RF Hybrid model trained and stored successfully!");
                 println!("🎯 Model is now active - switching to GAS-RF hybrid trading");
             }
+            "ensemble" => {
+                println!("🎯 Training Bayesian Ensemble model...");
+
+                // Create ensemble predictor
+                let mut ensemble = BayesianEnsemblePredictor::new();
+
+                // Prepare training data - use the same features and targets as other models
+                let prices: Vec<f64> = self.trades.iter().map(|t| t.price).collect();
+                let volumes: Vec<f64> = self.trades.iter().map(|t| t.volume).collect();
+
+                // Use the same targets as other models (price change 3 trades ahead)
+                let mut targets = Vec::new();
+                let n = self.trades.len();
+                for i in 10..n-4 {
+                    let future_price = self.trades[i+3].price;
+                    let current_price = self.trades[i].price;
+                    let price_change = (future_price - current_price) / current_price;
+                    targets.push(price_change);
+                }
+
+                println!("🎯 Training with {} samples (features: {}, targets: {})",
+                    targets.len(), normalized_features.len(), targets.len());
+
+                // Train the ensemble
+                ensemble.train(&prices, &volumes, &normalized_features, &targets);
+
+                // Store the ensemble model
+                self.model = Some(MLModel::Ensemble(Box::new(ensemble)));
+                println!("✅ Bayesian Ensemble model trained and stored successfully!");
+                println!("🎯 Model is now active - switching to Bayesian ensemble trading");
+            }
             _ => {
                 // Default to linear regression
                 self.train_linear_regression(&normalized_features, &targets);
@@ -1202,7 +1245,7 @@ impl SimpleMLPredictor {
         Some(current_momentum - previous_momentum)
     }
 
-    fn calculate_rsi_from_index(&self, index: usize, period: usize) -> Option<f64> {
+    pub fn calculate_rsi_from_index(&self, index: usize, period: usize) -> Option<f64> {
         if index < period { return None; }
         
         let start = index.saturating_sub(period - 1);
@@ -1246,7 +1289,7 @@ impl SimpleMLPredictor {
         Some((current_price - past_price) / past_price)
     }
 
-    fn calculate_macd_from_index(&self, index: usize) -> Option<f64> {
+    pub fn calculate_macd_from_index(&self, index: usize) -> Option<f64> {
         if index < 26 { return None; }
         
         // Calculate EMAs
@@ -1468,7 +1511,91 @@ impl SimpleMLPredictor {
                     None
                 }
             }
+            Some(MLModel::Ensemble(model)) => {
+                println!("🎯 Calling Bayesian Ensemble model predict");
+                // For ensemble models, use Bayesian model averaging with decision theory
+                if let Some(current_price) = self.trades.back().map(|t| t.price) {
+                    // Use the immutable prediction method
+                    let prediction = model.predict_immutable(current_price, &normalized_features);
+                    println!("🎯 Ensemble prediction: {:.4}", prediction);
+
+                    // Convert to signal based on prediction strength
+                    if prediction > 0.1 {
+                        Some(0.8) // Strong buy signal
+                    } else if prediction < -0.1 {
+                        Some(-0.8) // Strong sell signal
+                    } else {
+                        Some(0.0) // Neutral signal
+                    }
+                } else {
+                    None
+                }
+            }
             None => None,
+        }
+    }
+
+    /// Predict at a specific historical index (for volatility calculation)
+    pub fn predict_at_index(&self, index: usize) -> Option<f64> {
+        if self.model.is_none() || index >= self.trades.len() || index < 10 {
+            return None;
+        }
+
+        // Extract features at the specific index
+        let price_momentum = self.calculate_momentum_from_index(index, 5).unwrap_or(0.0);
+        let volume_change = if index >= 1 {
+            let current_vol = self.trades[index].volume;
+            let prev_vol = self.trades[index - 1].volume;
+            (current_vol - prev_vol) / prev_vol.max(1.0)
+        } else { 0.0 };
+        let recent_volatility = self.calculate_volatility_from_index(index, 10).unwrap_or(0.001);
+        let rsi = self.calculate_rsi_from_index(index, 14).unwrap_or(50.0);
+        let macd = self.calculate_macd_from_index(index).unwrap_or(0.0);
+
+        // Add advanced indicators
+        let bollinger_position = self.calculate_bollinger_position_from_index(index, 20).unwrap_or(0.0);
+        let stochastic = self.calculate_stochastic_from_index(index, 14, 3).unwrap_or(50.0);
+        let williams_r = self.calculate_williams_r_from_index(index, 14).unwrap_or(-50.0);
+        let volume_ratio = self.calculate_volume_ratio_from_index(index, 10).unwrap_or(1.0);
+        let price_acceleration = self.calculate_price_acceleration_from_index(index, 5).unwrap_or(0.0);
+
+        // Apply robust scaling and clipping
+        let features = [
+            self.clip_and_scale(price_momentum, -0.1, 0.1),
+            self.clip_and_scale(volume_change, -2.0, 2.0),
+            self.clip_and_scale(recent_volatility, 0.0, 0.05),
+            rsi / 100.0,
+            self.clip_and_scale(macd, -0.01, 0.01),
+            bollinger_position,
+            stochastic / 100.0,
+            (williams_r + 100.0) / 100.0,
+            self.clip_and_scale(volume_ratio, 0.1, 5.0),
+            self.clip_and_scale(price_acceleration, -0.01, 0.01),
+        ];
+
+        // Normalize features using stored parameters
+        let mut normalized_features = Vec::new();
+        for (i, &val) in features.iter().enumerate() {
+            if i < self.feature_means.len() && i < self.feature_stds.len() && self.feature_stds[i] > 0.0 {
+                let normalized = (val - self.feature_means[i]) / self.feature_stds[i];
+                normalized_features.push(normalized.clamp(-3.0, 3.0));
+            } else {
+                normalized_features.push(val);
+            }
+        }
+
+        // Make prediction (simplified - only handle ensemble for now)
+        match &self.model {
+            Some(MLModel::Ensemble(model)) => {
+                if let Some(current_price) = self.trades.get(index).map(|t| t.price) {
+                    let prediction = model.predict_immutable(current_price, &normalized_features);
+                    // Return the raw prediction value for volatility calculation
+                    Some(prediction)
+                } else {
+                    None
+                }
+            }
+            _ => None, // For now, only support ensemble predictions for volatility
         }
     }
 
@@ -2133,5 +2260,460 @@ impl SimpleMLPredictor {
         self.var_risk_manager.confidence_levels.iter()
             .map(|&conf| (conf, self.var_risk_manager.calculate_parametric_var(conf, use_heavy_tail)))
             .collect()
+    }
+
+    /// Update ensemble model performance for Bayesian learning
+    pub fn update_ensemble_performance(&mut self, pnl: f64, was_win: bool) {
+        if let Some(MLModel::Ensemble(ensemble)) = &mut self.model {
+            // Update performance for each model in the ensemble based on the trade outcome
+            // Since we don't know which specific model contributed most to this trade,
+            // we'll update all models with the same performance data
+            let model_names: Vec<String> = ensemble.models.keys().cloned().collect();
+            for model_name in model_names {
+                ensemble.update_performance_and_priors(&model_name, pnl, was_win);
+            }
+        }
+    }
+
+    /// Calculate volatility of recent predictions for dynamic threshold adjustment
+    pub fn get_prediction_volatility(&self) -> Option<f64> {
+        if self.trades.len() < 10 {
+            return Some(0.1); // Default volatility for insufficient data
+        }
+
+        // Get recent predictions (last 20 trades or available)
+        let recent_count = self.trades.len().min(20);
+        let mut predictions = Vec::new();
+
+        // Generate predictions for recent trades
+        for i in (self.trades.len().saturating_sub(recent_count))..self.trades.len() {
+            if let Some(prediction) = self.predict_at_index(i) {
+                predictions.push(prediction);
+            }
+        }
+
+        if predictions.len() < 5 {
+            return Some(0.1); // Not enough predictions
+        }
+
+        // Calculate standard deviation of predictions
+        let mean: f64 = predictions.iter().sum::<f64>() / predictions.len() as f64;
+        let variance: f64 = predictions.iter()
+            .map(|p| (p - mean).powi(2))
+            .sum::<f64>() / (predictions.len() - 1) as f64;
+
+        Some(variance.sqrt().max(0.01)) // Minimum volatility of 1%
+    }
+
+    /// Calculate Simple Moving Average from a specific index
+    pub fn calculate_sma_from_index(&self, index: usize, period: usize) -> Option<f64> {
+        if index >= self.trades.len() || period == 0 {
+            return None;
+        }
+
+        let start = index.saturating_sub(period - 1);
+        let count = (index - start + 1).min(period);
+
+        if count < period {
+            return None; // Not enough data
+        }
+
+        let sum: f64 = self.trades.range(start..=index)
+            .map(|t| t.price)
+            .sum();
+
+        Some(sum / count as f64)
+    }
+
+    /// Calculate volume trend from a specific index
+    pub fn calculate_volume_trend_from_index(&self, index: usize, period: usize) -> Option<f64> {
+        if index >= self.trades.len() || period < 2 {
+            return None;
+        }
+
+        let start = index.saturating_sub(period - 1);
+        let count = (index - start + 1).min(period);
+
+        if count < 2 {
+            return None; // Need at least 2 points for trend
+        }
+
+        // Calculate volume slope using linear regression
+        let volumes: Vec<f64> = self.trades.range(start..=index)
+            .map(|t| t.volume)
+            .collect();
+
+        let n = volumes.len() as f64;
+        let sum_x: f64 = (0..volumes.len()).map(|i| i as f64).sum();
+        let sum_y: f64 = volumes.iter().sum();
+        let sum_xy: f64 = volumes.iter().enumerate()
+            .map(|(i, &v)| i as f64 * v)
+            .sum();
+        let sum_x2: f64 = (0..volumes.len()).map(|i| (i as f64).powi(2)).sum();
+
+        let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x.powi(2));
+
+        // Normalize slope by average volume to get relative trend
+        let avg_volume = sum_y / n;
+        if avg_volume > 0.0 {
+            Some((slope / avg_volume).clamp(-1.0, 1.0))
+        } else {
+            Some(0.0)
+        }
+    }
+}
+
+/// Bayesian Decision Maker for optimal trading decisions
+#[derive(Debug, Clone)]
+pub struct BayesianDecisionMaker {
+    /// Risk tolerance parameter (higher = more risk averse)
+    risk_tolerance: f64,
+    /// Expected return threshold
+    return_threshold: f64,
+}
+
+impl BayesianDecisionMaker {
+    pub fn new() -> Self {
+        Self {
+            risk_tolerance: 2.0, // Moderate risk tolerance
+            return_threshold: 0.001, // 0.1% minimum expected return
+        }
+    }
+
+    /// Make optimal trading decision using Bayesian decision theory
+    pub fn decide_action(&self, prediction: f64, volatility: f64) -> TradingAction {
+        // Calculate expected utility for each action
+        let buy_utility = self.expected_utility(TradingAction::Buy, prediction, volatility);
+        let sell_utility = self.expected_utility(TradingAction::Sell, prediction, volatility);
+        let hold_utility = self.expected_utility(TradingAction::Hold, prediction, volatility);
+
+        // Choose action with highest expected utility
+        if buy_utility > sell_utility && buy_utility > hold_utility {
+            TradingAction::Buy
+        } else if sell_utility > buy_utility && sell_utility > hold_utility {
+            TradingAction::Sell
+        } else {
+            TradingAction::Hold
+        }
+    }
+
+    /// Calculate expected utility for a given action
+    fn expected_utility(&self, action: TradingAction, prediction: f64, volatility: f64) -> f64 {
+        // Simplified utility calculation
+        // In practice, this would use more sophisticated loss functions
+        match action {
+            TradingAction::Buy => {
+                if prediction > self.return_threshold {
+                    prediction - self.risk_tolerance * volatility
+                } else {
+                    -self.risk_tolerance * volatility
+                }
+            }
+            TradingAction::Sell => {
+                if prediction < -self.return_threshold {
+                    -prediction - self.risk_tolerance * volatility
+                } else {
+                    -self.risk_tolerance * volatility
+                }
+            }
+            TradingAction::Hold => {
+                // Small positive utility for holding (avoids transaction costs)
+                0.001
+            }
+        }
+    }
+}
+
+/// Trading action enum
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TradingAction {
+    Buy,
+    Sell,
+    Hold,
+}
+
+/// Bayesian Ensemble Predictor combining multiple ML models
+pub struct BayesianEnsemblePredictor {
+    /// Individual models in the ensemble
+    models: HashMap<String, Box<dyn ModelPredictor>>,
+    /// Bayesian analyzer for model comparison
+    bayesian_analyzer: crate::trading::BayesianAnalyzer,
+    /// Model performance history
+    performance_history: HashMap<String, Vec<ModelPerformance>>,
+    /// Bayesian decision maker
+    decision_maker: BayesianDecisionMaker,
+}
+
+impl std::fmt::Debug for BayesianEnsemblePredictor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BayesianEnsemblePredictor")
+            .field("models_count", &self.models.len())
+            .field("bayesian_analyzer", &self.bayesian_analyzer)
+            .field("performance_history", &self.performance_history)
+            .field("decision_maker", &self.decision_maker)
+            .finish()
+    }
+}
+
+impl BayesianEnsemblePredictor {
+    pub fn new() -> Self {
+        Self {
+            models: HashMap::new(),
+            bayesian_analyzer: crate::trading::BayesianAnalyzer::new(),
+            performance_history: HashMap::new(),
+            decision_maker: BayesianDecisionMaker::new(),
+        }
+    }
+
+    /// Train the ensemble with multiple models
+    pub fn train(&mut self, prices: &[f64], volumes: &[f64], features: &[Vec<f64>], targets: &[f64]) {
+        // Train individual models
+        self.train_individual_models(prices, volumes, features, targets);
+
+        // Initialize performance tracking
+        for model_name in self.models.keys() {
+            self.performance_history.insert(model_name.clone(), Vec::new());
+        }
+    }
+
+    /// Train individual models for the ensemble
+    fn train_individual_models(&mut self, prices: &[f64], volumes: &[f64], features: &[Vec<f64>], targets: &[f64]) {
+        // Train GAS-GLD model
+        let mut gas_gld = GASModel::new(GASDistribution::GLD(GeneralizedLambda::new(0.0, 1.0, 1.0, 1.0)), 1000);
+        if let Some(returns) = Self::calculate_returns(prices) {
+            for &ret in &returns {
+                gas_gld.update(ret);
+            }
+            self.models.insert("gas_gld".to_string(), Box::new(gas_gld));
+        }
+
+        // Train Random Forest model
+        if let Ok(x) = DenseMatrix::from_2d_array(&features.iter().map(|row| row.as_slice()).collect::<Vec<_>>()) {
+            let y = targets.to_vec();
+            if let Ok(rf_model) = RandomForestRegressor::fit(&x, &y,
+                smartcore::ensemble::random_forest_regressor::RandomForestRegressorParameters::default()
+                    .with_n_trees(50).with_max_depth(8)) {
+                self.models.insert("random_forest".to_string(), Box::new(RandomForestWrapper::new(rf_model)));
+            }
+        }
+
+        // Train Linear Regression model
+        if let Ok(x) = Array2::from_shape_vec((features.len(), features[0].len()), features.iter().flatten().cloned().collect()) {
+            if let Ok(lr_model) = linfa_linear::LinearRegression::default().fit(&Dataset::new(x, Array1::from_vec(targets.to_vec()))) {
+                self.models.insert("linear_regression".to_string(), Box::new(LinearRegressionWrapper::new(lr_model)));
+            }
+        }
+    }
+
+    /// Make ensemble prediction using Bayesian model averaging
+    pub fn predict(&mut self, current_price: f64, features: &[f64]) -> f64 {
+        let mut predictions = Vec::new();
+        let mut performances = Vec::new();
+
+        // Get predictions from all models
+        for (model_name, model) in &self.models {
+            if let Some(pred) = model.predict(current_price, features) {
+                predictions.push((model_name.clone(), pred));
+
+                // Get recent performance for this model
+                let perf = self.performance_history.get(model_name)
+                    .and_then(|history| history.last())
+                    .cloned()
+                    .unwrap_or_else(|| ModelPerformance::new(1, 1, 0.0)); // Default neutral performance
+                performances.push((model_name.as_str(), perf));
+            }
+        }
+
+        if predictions.is_empty() {
+            return 0.0;
+        }
+
+        // Calculate BMA weights
+        let bma_weights = self.bayesian_analyzer.bma_weights(&performances.iter().map(|(name, perf)| (*name, perf)).collect::<Vec<_>>());
+
+        // Weighted ensemble prediction
+        let mut weighted_sum = 0.0;
+        let mut total_weight = 0.0;
+
+        for (model_name, prediction) in &predictions {
+            let weight = bma_weights.get(model_name).cloned().unwrap_or(1.0 / predictions.len() as f64);
+            weighted_sum += prediction * weight;
+            total_weight += weight;
+        }
+
+        if total_weight > 0.0 {
+            weighted_sum / total_weight
+        } else {
+            0.0
+        }
+    }
+
+    /// Make ensemble prediction without updating internal state (for immutable access)
+    pub fn predict_immutable(&self, current_price: f64, features: &[f64]) -> f64 {
+        let mut predictions = Vec::new();
+        let mut performances = Vec::new();
+
+        // Get predictions from all models
+        for (model_name, model) in &self.models {
+            if let Some(pred) = model.predict(current_price, features) {
+                predictions.push((model_name.clone(), pred));
+
+                // Get recent performance for this model (immutable access)
+                let perf = self.performance_history.get(model_name)
+                    .and_then(|history| history.last())
+                    .cloned()
+                    .unwrap_or_else(|| ModelPerformance::new(1, 1, 0.0)); // Default neutral performance
+                performances.push((model_name.as_str(), perf));
+            }
+        }
+
+        if predictions.is_empty() {
+            return 0.0;
+        }
+
+        // Calculate BMA weights
+        let bma_weights = self.bayesian_analyzer.bma_weights(&performances.iter().map(|(name, perf)| (*name, perf)).collect::<Vec<_>>());
+
+        // Debug: Log individual model predictions and weights
+        println!("🎯 Individual model predictions:");
+        for (model_name, prediction) in &predictions {
+            let weight = bma_weights.get(model_name).cloned().unwrap_or(1.0 / predictions.len() as f64);
+            println!("  {}: {:.4} (weight: {:.4})", model_name, prediction, weight);
+        }
+
+        // Debug: Log performance data
+        println!("🎯 Model performances:");
+        for (model_name, perf) in &performances {
+            println!("  {}: wins={}/{}, pnl=${:.2}", model_name, perf.wins, perf.total_trades, perf.total_pnl);
+        }
+
+        // Weighted ensemble prediction
+        let mut weighted_sum = 0.0;
+        let mut total_weight = 0.0;
+
+        for (model_name, prediction) in &predictions {
+            let weight = bma_weights.get(model_name).cloned().unwrap_or(1.0 / predictions.len() as f64);
+            weighted_sum += prediction * weight;
+            total_weight += weight;
+        }
+
+        let final_prediction = if total_weight > 0.0 {
+            weighted_sum / total_weight
+        } else {
+            0.0
+        };
+
+        println!("🎯 Ensemble prediction: {:.4}", final_prediction);
+        final_prediction
+    }
+
+    /// Make decision using Bayesian decision theory
+    pub fn decide_action(&mut self, prediction: f64, volatility: f64) -> TradingAction {
+        self.decision_maker.decide_action(prediction, volatility)
+    }
+
+    /// Update performance and priors for Bayesian learning
+    /// This version tracks individual model performance based on prediction accuracy
+    pub fn update_performance_and_priors(&mut self, model_name: &str, pnl: f64, was_win: bool) {
+        // For ensemble learning, we need to track individual model contributions
+        // Since we don't know which model contributed most to the ensemble prediction,
+        // we'll use a different approach: track prediction accuracy over time
+
+        // Get existing performance history for this model
+        let history = self.performance_history.entry(model_name.to_string())
+            .or_insert_with(Vec::new);
+
+        // Calculate cumulative performance from all previous trades
+        let mut total_wins = 0;
+        let mut total_trades = 0;
+        let mut total_pnl = 0.0;
+
+        for perf in history.iter() {
+            total_wins += perf.wins;
+            total_trades += perf.total_trades;
+            total_pnl += perf.total_pnl;
+        }
+
+        // Add the current trade
+        total_wins += if was_win { 1 } else { 0 };
+        total_trades += 1;
+        total_pnl += pnl;
+
+        // Create cumulative performance record
+        let cumulative_perf = ModelPerformance::new(total_wins, total_trades, total_pnl);
+
+        // Replace the entire history with just the cumulative record
+        *history = vec![cumulative_perf.clone()];
+
+        // Update Bayesian priors with cumulative performance
+        self.bayesian_analyzer.update_priors(model_name, &cumulative_perf);
+    }
+
+    /// Calculate returns from prices
+    fn calculate_returns(prices: &[f64]) -> Option<Vec<f64>> {
+        if prices.len() < 2 {
+            return None;
+        }
+
+        Some(prices.windows(2)
+            .map(|window| (window[1] - window[0]) / window[0])
+            .collect())
+    }
+}
+
+/// Trait for model predictors in the ensemble
+pub trait ModelPredictor {
+    fn predict(&self, current_price: f64, features: &[f64]) -> Option<f64>;
+}
+
+/// Wrapper for Random Forest model
+#[derive(Debug)]
+pub struct RandomForestWrapper {
+    model: RandomForestRegressor<f64, f64, DenseMatrix<f64>, Vec<f64>>,
+}
+
+impl RandomForestWrapper {
+    pub fn new(model: RandomForestRegressor<f64, f64, DenseMatrix<f64>, Vec<f64>>) -> Self {
+        Self { model }
+    }
+}
+
+impl ModelPredictor for RandomForestWrapper {
+    fn predict(&self, _current_price: f64, features: &[f64]) -> Option<f64> {
+        let input = DenseMatrix::from_2d_array(&[features]).ok()?;
+        let raw_prediction = self.model.predict(&input).ok()?.first().copied()?;
+
+        // Scale the prediction to match GAS model signal strength (±0.8)
+        // Assuming raw predictions are typically in range [-0.01, 0.01], scale to [-0.8, 0.8]
+        let scaled_prediction = raw_prediction * 80.0;
+
+        // Clamp to reasonable bounds
+        Some(scaled_prediction.max(-0.8).min(0.8))
+    }
+}
+
+/// Wrapper for Linear Regression model
+#[derive(Debug, Clone)]
+pub struct LinearRegressionWrapper {
+    model: linfa_linear::FittedLinearRegression<f64>,
+}
+
+impl LinearRegressionWrapper {
+    pub fn new(model: linfa_linear::FittedLinearRegression<f64>) -> Self {
+        Self { model }
+    }
+}
+
+impl ModelPredictor for LinearRegressionWrapper {
+    fn predict(&self, _current_price: f64, features: &[f64]) -> Option<f64> {
+        let input = Array2::from_shape_vec((1, features.len()), features.to_vec()).ok()?;
+        let raw_prediction = self.model.predict(&input).get(0).copied()?;
+
+        // Scale the prediction to match GAS model signal strength (±0.8)
+        // Assuming raw predictions are typically in range [-0.01, 0.01], scale to [-0.8, 0.8]
+        let scaled_prediction = raw_prediction * 80.0;
+
+        // Clamp to reasonable bounds
+        Some(scaled_prediction.max(-0.8).min(0.8))
     }
 }

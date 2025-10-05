@@ -84,4 +84,5 @@ pub enum MLModel {
     HybridEGARCHLSTM(Box<crate::ml::HybridEGARCHLSTM>),
     GAS(Box<crate::ml::GASModel>),
     HybridGASRF(Box<crate::ml::HybridGASRF>),
+    Ensemble(Box<crate::ml::BayesianEnsemblePredictor>),
 }
