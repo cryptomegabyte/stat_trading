@@ -27,6 +27,18 @@ async fn main() -> Result<()> {
         "gas_vg".to_string()
     };
 
+    // Default trade limits (higher for paper trading since no real money risk)
+    let max_trades = if let Some(pos) = args.iter().position(|arg| arg == "--max-trades") {
+        args.get(pos + 1)
+            .unwrap_or(&"50000".to_string())
+            .parse::<u64>()
+            .unwrap_or(50000)
+    } else if is_paper_trading {
+        50000 // Much higher limit for paper trading
+    } else {
+        5000  // Conservative limit for live trading
+    };
+
     if is_backtest {
         info!("Starting backtest mode with model: {}", model_type);
         run_backtest(model_type).await?;
@@ -35,16 +47,16 @@ async fn main() -> Result<()> {
             "Starting PAPER TRADING mode with model: {} (NO REAL MONEY)",
             model_type
         );
-        run_paper_trading(model_type).await?;
+        run_paper_trading(model_type, max_trades).await?;
     } else {
         info!("Starting live trading bot demo with Kraken and ML prediction");
-        run_live().await?;
+        run_live(max_trades).await?;
     }
 
     Ok(())
 }
 
-async fn run_paper_trading(model_type: String) -> Result<()> {
+async fn run_paper_trading(model_type: String, max_trades: u64) -> Result<()> {
     info!("📈 PAPER TRADING MODE - SIMULATED TRADES ONLY");
     info!("💰 Starting balance: $2000 total (shared between all pairs)");
     info!("🎯 Risk management: 1.5% stop-loss, 4% take-profit, dynamic position sizing");
@@ -116,9 +128,9 @@ async fn run_paper_trading(model_type: String) -> Result<()> {
                     status_counter = 0;
                 }
 
-                // Safety check - stop after 10000 trades for demo (10x more for paper trading)
-                if trade_count >= 10000 {
-                    info!("🛑 Paper trading demo limit reached (10000 trades) - stopping bot");
+                // Safety check - stop after max_trades for demo
+                if trade_count >= max_trades {
+                    info!("🛑 Paper trading demo limit reached ({} trades) - stopping bot", max_trades);
                     break;
                 }
             }
@@ -136,7 +148,7 @@ async fn run_paper_trading(model_type: String) -> Result<()> {
     Ok(())
 }
 
-async fn run_live() -> Result<()> {
+async fn run_live(max_trades: u64) -> Result<()> {
     info!("🚀 Starting MULTI-PAIR LIVE TRADING BOT");
     info!("⚠️  WARNING: This will execute real trades!");
     info!("💰 Starting balance: $2000 total (shared between all pairs)");
@@ -218,9 +230,9 @@ async fn run_live() -> Result<()> {
                     status_counter = 0;
                 }
 
-                // Safety check - stop after 5000 trades for demo (5x more with 5 pairs)
-                if trade_count >= 5000 {
-                    info!("🛑 Demo limit reached (5000 trades) - stopping bot");
+                // Safety check - stop after max_trades for demo
+                if trade_count >= max_trades {
+                    info!("🛑 Demo limit reached ({} trades) - stopping bot", max_trades);
                     break;
                 }
             }

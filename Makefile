@@ -23,8 +23,8 @@ help:
 	@echo "  make check-all      - Run all checks (build, test, clippy)"
 	@echo ""
 	@echo "Running the Bot:"
-	@echo "  make run-paper      - Run paper trading simulation"
-	@echo "  make run-live       - Run live trading (requires API keys)"
+	@echo "  make run-paper      - Run paper trading simulation (100k trades)"
+	@echo "  make run-live       - Run live trading (10k trades, requires API keys)"
 	@echo "  make run-backtest   - Run backtesting mode"
 	@echo ""
 	@echo "Development:"
@@ -61,12 +61,12 @@ check-all: build test clippy
 # Running the bot
 run-paper:
 	@echo "📈 Starting paper trading simulation..."
-	cargo run -- --mode paper --model gas_vg --pairs XBT/USD,XRP/USD
+	cargo run -- --paper-trading --model gas_vg --max-trades 100000
 
 run-live:
 	@echo "🚀 Starting live trading (ensure API keys are set)..."
 	@echo "⚠️  WARNING: This will execute real trades!"
-	cargo run -- --mode live --model gas_vg --pairs XBT/USD,XRP/USD
+	cargo run -- --mode live --model gas_vg --max-trades 10000
 
 run-backtest:
 	@echo "📊 Starting backtesting..."
