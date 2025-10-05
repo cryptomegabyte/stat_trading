@@ -2372,6 +2372,12 @@ pub struct BayesianDecisionMaker {
     return_threshold: f64,
 }
 
+impl Default for BayesianDecisionMaker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BayesianDecisionMaker {
     pub fn new() -> Self {
         Self {
@@ -2455,6 +2461,12 @@ impl std::fmt::Debug for BayesianEnsemblePredictor {
     }
 }
 
+impl Default for BayesianEnsemblePredictor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BayesianEnsemblePredictor {
     pub fn new() -> Self {
         Self {
@@ -2477,7 +2489,7 @@ impl BayesianEnsemblePredictor {
     }
 
     /// Train individual models for the ensemble
-    fn train_individual_models(&mut self, prices: &[f64], volumes: &[f64], features: &[Vec<f64>], targets: &[f64]) {
+    fn train_individual_models(&mut self, prices: &[f64], _volumes: &[f64], features: &[Vec<f64>], targets: &[f64]) {
         // Train GAS-GLD model
         let mut gas_gld = GASModel::new(GASDistribution::GLD(GeneralizedLambda::new(0.0, 1.0, 1.0, 1.0)), 1000);
         if let Some(returns) = Self::calculate_returns(prices) {
@@ -2621,7 +2633,7 @@ impl BayesianEnsemblePredictor {
 
         // Get existing performance history for this model
         let history = self.performance_history.entry(model_name.to_string())
-            .or_insert_with(Vec::new);
+            .or_default();
 
         // Calculate cumulative performance from all previous trades
         let mut total_wins = 0;
@@ -2688,7 +2700,7 @@ impl ModelPredictor for RandomForestWrapper {
         let scaled_prediction = raw_prediction * 80.0;
 
         // Clamp to reasonable bounds
-        Some(scaled_prediction.max(-0.8).min(0.8))
+        Some(scaled_prediction.clamp(-0.8, 0.8))
     }
 }
 
@@ -2714,6 +2726,6 @@ impl ModelPredictor for LinearRegressionWrapper {
         let scaled_prediction = raw_prediction * 80.0;
 
         // Clamp to reasonable bounds
-        Some(scaled_prediction.max(-0.8).min(0.8))
+        Some(scaled_prediction.clamp(-0.8, 0.8))
     }
 }

@@ -487,7 +487,7 @@ impl PairTrader {
     }
 
     /// Calculate dynamic thresholds based on ensemble prediction volatility and performance
-    pub fn calculate_dynamic_thresholds(&self, current_signal: f64) -> (f64, f64) {
+    pub fn calculate_dynamic_thresholds(&self, _current_signal: f64) -> (f64, f64) {
         // Base thresholds that adapt to the ensemble's signal strength
         let base_buy_threshold: f64;
         let base_sell_threshold: f64;
