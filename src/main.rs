@@ -23,13 +23,20 @@ async fn main() -> Result<()> {
         .with_max_level(Level::INFO)
         .init();
 
-    // Check for backtest mode
+    // Check for backtest mode and model type
     let args: Vec<String> = env::args().collect();
     let is_backtest = args.contains(&"--backtest".to_string());
+    
+    // Default to hybrid model, but allow override
+    let model_type = if let Some(pos) = args.iter().position(|arg| arg == "--model") {
+        args.get(pos + 1).unwrap_or(&"hybrid_egarch_lstm".to_string()).clone()
+    } else {
+        "hybrid_egarch_lstm".to_string()
+    };
 
     if is_backtest {
-        info!("Starting backtest mode");
-        run_backtest().await?;
+        info!("Starting backtest mode with model: {}", model_type);
+        run_backtest(model_type).await?;
     } else {
         info!("Starting live trading bot demo with Binance and ML prediction");
         run_live().await?;
@@ -133,13 +140,13 @@ async fn run_live() -> Result<()> {
     Ok(())
 }
 
-async fn run_backtest() -> Result<()> {
-    info!("🚀 Starting MULTI-PAIR BACKTEST");
-    info!("📊 Testing pairs: XRP, BNB");
+async fn run_backtest(model_type: String) -> Result<()> {
+    info!("🚀 Starting MULTI-PAIR BACKTEST with model: {}", model_type);
+    info!("📊 Testing multiple crypto pairs: BTC, ETH, XRP, SOL, BNB, ADA, DOT, LINK, LTC, AVAX");
     info!("📅 1 year of hourly data from Kraken");
 
-    // Initialize backtester
-    let mut backtester = Backtester::new();
+    // Initialize backtester with specified model type
+    let mut backtester = Backtester::with_model_type(&model_type);
 
     // Fetch data for each pair
     let pairs = backtester.config.pairs.clone(); // Clone to avoid borrowing issues

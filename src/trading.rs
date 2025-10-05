@@ -85,8 +85,16 @@ pub struct PairTrader {
 
 impl PairTrader {
     pub fn new(config: &TradingConfig, pair: TradingPair) -> Self {
+        Self::new_with_model(config, pair, "hybrid_egarch_lstm")
+    }
+
+    pub fn new_with_model(config: &TradingConfig, pair: TradingPair, model_type: &str) -> Self {
+        let mut predictor = SimpleMLPredictor::new(50);
+        // Set the model type for training
+        predictor.model_type = model_type.to_string();
+        
         Self {
-            predictor: SimpleMLPredictor::new(50),
+            predictor,
             position_sizer: PositionSizer::with_leverage(config.leverage),
             balance: config.initial_balance, // Use the allocated balance per pair
             position: 0.0,
@@ -153,7 +161,12 @@ impl PairTrader {
         let volatility = self.position_sizer.get_current_volatility(&self.predictor);
         let confidence = self.position_sizer.get_signal_confidence(&self.predictor);
 
-        let risk_pct = self.position_sizer.calculate_position_size(self.balance, price, volatility, confidence);
+        // Use VaR-based position sizing for better risk management
+        let var_position_size = self.predictor.get_var_position_size(self.balance, 0.02); // 2% max loss
+        let traditional_risk_pct = self.position_sizer.calculate_position_size(self.balance, price, volatility, confidence);
+
+        // Use the more conservative of the two approaches
+        let risk_pct = var_position_size.min(traditional_risk_pct);
 
         // Use the risk percentage, capped at max position size
         let adjusted_risk_pct = risk_pct.min(self.max_position_size_pct);
@@ -166,7 +179,7 @@ impl PairTrader {
         self.balance -= position_size * price;
         self.total_trades += 1;
 
-        info!("BUY: {:.6} units at ${}, position: {:.6}, remaining balance: ${:.2}, size: {:.1}% (vol: {:.3}, conf: {:.2})",
+        info!("BUY: {:.6} units at ${}, position: {:.6}, remaining balance: ${:.2}, size: {:.1}% (VaR-adjusted, vol: {:.3}, conf: {:.2})",
               position_size, price, self.position, self.balance, adjusted_risk_pct * 100.0, volume, confidence);
     }
 
@@ -233,11 +246,15 @@ impl Default for Backtester {
 
 impl Backtester {
     pub fn new() -> Self {
+        Self::with_model_type("hybrid_egarch_lstm")
+    }
+
+    pub fn with_model_type(model_type: &str) -> Self {
         let config = TradingConfig::default();
         let mut traders = HashMap::new();
 
         for pair in &config.pairs {
-            traders.insert(pair.clone(), PairTrader::new(&config, pair.clone()));
+            traders.insert(pair.clone(), PairTrader::new_with_model(&config, pair.clone(), model_type));
         }
 
         Self { traders, config }
@@ -305,10 +322,21 @@ impl LiveTrader {
         if let Some(trader) = self.traders.get_mut(pair) {
             trader.predictor.add_trade(price, volume);
 
-            // Check for stop loss / take profit
+            // Check for stop loss / take profit / VaR-based risk management
             if let Some(entry_price) = trader.entry_price {
                 if trader.position > 0.0 {
+                    let pnl = (price - entry_price) * trader.position;
                     let pnl_pct = (price - entry_price) / entry_price;
+                    
+                    // Check VaR-based risk limits
+                    if trader.predictor.should_close_based_on_var(pnl, trader.position * price) {
+                        info!("🛡️ {} VaR RISK LIMIT triggered (P&L: ${:.2}, {:.2}%)", 
+                              pair.symbol().to_uppercase(), pnl, pnl_pct * 100.0);
+                        Self::execute_sell(trader, price).await?;
+                        return Ok(());
+                    }
+                    
+                    // Traditional stop loss
                     if pnl_pct <= -trader.stop_loss_pct {
                         info!("🛑 {} STOP LOSS triggered at {:.2}%", pair.symbol().to_uppercase(), pnl_pct * 100.0);
                         Self::execute_sell(trader, price).await?;

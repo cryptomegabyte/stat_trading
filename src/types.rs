@@ -81,4 +81,7 @@ pub struct TradeData {
 pub enum MLModel {
     LinearRegression(linfa_linear::FittedLinearRegression<f64>),
     RandomForest(smartcore::ensemble::random_forest_regressor::RandomForestRegressor<f64, f64, smartcore::linalg::basic::matrix::DenseMatrix<f64>, Vec<f64>>),
+    HybridEGARCHLSTM(Box<crate::ml::HybridEGARCHLSTM>),
+    GAS(Box<crate::ml::GASModel>),
+    HybridGASRF(Box<crate::ml::HybridGASRF>),
 }
