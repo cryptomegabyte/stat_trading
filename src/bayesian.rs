@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use statrs::distribution::{Beta, Normal, ContinuousCDF};
+use statrs::distribution::{Beta, ContinuousCDF, Normal};
 use statrs::function::beta::beta;
+use std::collections::HashMap;
 
 /// Bayesian analysis utilities for trading model comparison and uncertainty quantification
 #[derive(Debug)]
@@ -33,19 +33,41 @@ impl BayesianAnalyzer {
 
     /// Calculate Bayes factor comparing two models
     /// BF > 1 favors model1, BF < 1 favors model2
-    pub fn bayes_factor(&self, model1: &str, model2: &str, data1: &ModelPerformance, data2: &ModelPerformance) -> f64 {
+    pub fn bayes_factor(
+        &self,
+        model1: &str,
+        model2: &str,
+        data1: &ModelPerformance,
+        data2: &ModelPerformance,
+    ) -> f64 {
         let prior1 = self.model_priors.get(model1).unwrap_or(&(2.0, 2.0));
         let prior2 = self.model_priors.get(model2).unwrap_or(&(2.0, 2.0));
 
-        let marg_like1 = self.beta_binomial_marginal_likelihood(data1.wins, data1.total_trades, prior1.0, prior1.1);
-        let marg_like2 = self.beta_binomial_marginal_likelihood(data2.wins, data2.total_trades, prior2.0, prior2.1);
+        let marg_like1 = self.beta_binomial_marginal_likelihood(
+            data1.wins,
+            data1.total_trades,
+            prior1.0,
+            prior1.1,
+        );
+        let marg_like2 = self.beta_binomial_marginal_likelihood(
+            data2.wins,
+            data2.total_trades,
+            prior2.0,
+            prior2.1,
+        );
 
         // Assuming equal prior model probabilities for now
         marg_like1 / marg_like2
     }
 
     /// Compute marginal likelihood for beta-binomial model
-    fn beta_binomial_marginal_likelihood(&self, wins: usize, total: usize, alpha: f64, beta_param: f64) -> f64 {
+    fn beta_binomial_marginal_likelihood(
+        &self,
+        wins: usize,
+        total: usize,
+        alpha: f64,
+        beta_param: f64,
+    ) -> f64 {
         let losses = total - wins;
 
         // Marginal likelihood = ∫ p(data|θ) p(θ) dθ
@@ -57,13 +79,24 @@ impl BayesianAnalyzer {
     }
 
     /// Calculate posterior probability that model1 is better than model2
-    pub fn posterior_model_probability(&self, model1: &str, model2: &str, data1: &ModelPerformance, data2: &ModelPerformance) -> f64 {
+    pub fn posterior_model_probability(
+        &self,
+        model1: &str,
+        model2: &str,
+        data1: &ModelPerformance,
+        data2: &ModelPerformance,
+    ) -> f64 {
         let bf = self.bayes_factor(model1, model2, data1, data2);
         bf / (bf + 1.0)
     }
 
     /// Calculate credible interval for win rate
-    pub fn win_rate_credible_interval(&self, model: &str, data: &ModelPerformance, credibility: f64) -> (f64, f64) {
+    pub fn win_rate_credible_interval(
+        &self,
+        model: &str,
+        data: &ModelPerformance,
+        credibility: f64,
+    ) -> (f64, f64) {
         let prior = self.model_priors.get(model).unwrap_or(&(2.0, 2.0));
 
         let post_alpha = prior.0 + data.wins as f64;
@@ -76,7 +109,7 @@ impl BayesianAnalyzer {
 
         (
             beta_dist.inverse_cdf(lower_quantile),
-            beta_dist.inverse_cdf(upper_quantile)
+            beta_dist.inverse_cdf(upper_quantile),
         )
     }
 
@@ -98,7 +131,7 @@ impl BayesianAnalyzer {
 
         (
             normal_dist.inverse_cdf(lower_quantile),
-            normal_dist.inverse_cdf(upper_quantile)
+            normal_dist.inverse_cdf(upper_quantile),
         )
     }
 
@@ -113,7 +146,7 @@ impl BayesianAnalyzer {
                 performance.wins,
                 performance.total_trades,
                 prior.0,
-                prior.1
+                prior.1,
             );
             weights.insert(model_name.to_string(), marg_like);
             total_weight += marg_like;

@@ -1,15 +1,15 @@
-use crate::types::{TradeData, MLModel};
-use smartcore::ensemble::random_forest_regressor::RandomForestRegressor;
-use smartcore::linalg::basic::matrix::DenseMatrix;
-use smartcore::linalg::basic::arrays::Array;
+use crate::trading::ModelPerformance;
+use crate::types::{MLModel, TradeData};
 use linfa::prelude::*;
 use linfa_linear::LinearRegression;
 use ndarray::{Array1, Array2};
-use std::collections::{VecDeque, HashMap};
-use std::time::{SystemTime, UNIX_EPOCH};
-use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
+use smartcore::ensemble::random_forest_regressor::RandomForestRegressor;
+use smartcore::linalg::basic::arrays::Array;
+use smartcore::linalg::basic::matrix::DenseMatrix;
 use special::Gamma; // For special functions in heavy-tailed distributions
-use crate::trading::ModelPerformance;
+use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
+use std::collections::{HashMap, VecDeque};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Heavy-tailed distribution trait for GAS models
 pub trait HeavyTailedDistribution {
@@ -22,16 +22,22 @@ pub trait HeavyTailedDistribution {
 /// Generalized Hyperbolic Distribution (GHD)
 #[derive(Debug, Clone)]
 pub struct GeneralizedHyperbolic {
-    pub lambda: f64,  // Shape parameter
-    pub alpha: f64,   // Tail heaviness
-    pub beta: f64,    // Asymmetry
-    pub delta: f64,   // Scale
-    pub mu: f64,      // Location
+    pub lambda: f64, // Shape parameter
+    pub alpha: f64,  // Tail heaviness
+    pub beta: f64,   // Asymmetry
+    pub delta: f64,  // Scale
+    pub mu: f64,     // Location
 }
 
 impl GeneralizedHyperbolic {
     pub fn new(lambda: f64, alpha: f64, beta: f64, delta: f64, mu: f64) -> Self {
-        Self { lambda, alpha, beta, delta, mu }
+        Self {
+            lambda,
+            alpha,
+            beta,
+            delta,
+            mu,
+        }
     }
 }
 
@@ -114,15 +120,20 @@ impl HeavyTailedDistribution for GeneralizedHyperbolic {
 /// Variance Gamma Distribution (VG)
 #[derive(Debug, Clone)]
 pub struct VarianceGamma {
-    pub nu: f64,      // Shape parameter
-    pub theta: f64,   // Asymmetry
-    pub sigma: f64,   // Scale
-    pub mu: f64,      // Location
+    pub nu: f64,    // Shape parameter
+    pub theta: f64, // Asymmetry
+    pub sigma: f64, // Scale
+    pub mu: f64,    // Location
 }
 
 impl VarianceGamma {
     pub fn new(nu: f64, theta: f64, sigma: f64, mu: f64) -> Self {
-        Self { nu, theta, sigma, mu }
+        Self {
+            nu,
+            theta,
+            sigma,
+            mu,
+        }
     }
 }
 
@@ -191,15 +202,20 @@ impl HeavyTailedDistribution for VarianceGamma {
 /// Normal Inverse Gaussian Distribution (NIG)
 #[derive(Debug, Clone)]
 pub struct NormalInverseGaussian {
-    pub alpha: f64,   // Tail heaviness
-    pub beta: f64,    // Asymmetry
-    pub delta: f64,   // Scale
-    pub mu: f64,      // Location
+    pub alpha: f64, // Tail heaviness
+    pub beta: f64,  // Asymmetry
+    pub delta: f64, // Scale
+    pub mu: f64,    // Location
 }
 
 impl NormalInverseGaussian {
     pub fn new(alpha: f64, beta: f64, delta: f64, mu: f64) -> Self {
-        Self { alpha, beta, delta, mu }
+        Self {
+            alpha,
+            beta,
+            delta,
+            mu,
+        }
     }
 }
 
@@ -283,7 +299,12 @@ pub struct GeneralizedLambda {
 
 impl GeneralizedLambda {
     pub fn new(lambda1: f64, lambda2: f64, lambda3: f64, lambda4: f64) -> Self {
-        Self { lambda1, lambda2, lambda3, lambda4 }
+        Self {
+            lambda1,
+            lambda2,
+            lambda3,
+            lambda4,
+        }
     }
 }
 
@@ -384,10 +405,10 @@ impl GeneralizedLambda {
 #[derive(Debug, Clone)]
 pub struct GASModel {
     pub distribution: GASDistribution,
-    pub omega: f64,      // Constant term
-    pub alpha: f64,      // ARCH parameter
-    pub beta: f64,       // GARCH parameter
-    pub kappa: f64,      // Score scaling parameter
+    pub omega: f64,           // Constant term
+    pub alpha: f64,           // ARCH parameter
+    pub beta: f64,            // GARCH parameter
+    pub kappa: f64,           // Score scaling parameter
     pub parameters: Vec<f64>, // Distribution parameters
     pub scores: Vec<f64>,     // Historical scores
     pub variances: Vec<f64>,  // Conditional variances
@@ -406,17 +427,17 @@ impl GASModel {
     pub fn new(distribution: GASDistribution, max_history: usize) -> Self {
         let parameters = match &distribution {
             GASDistribution::GHD(_) => vec![1.0, 1.5, 0.0, 1.0, 0.0], // lambda, alpha, beta, delta, mu - optimized for crypto
-            GASDistribution::VG(_) => vec![0.5, 0.0, 1.0, 0.0],        // nu, theta, sigma, mu - optimized for heavy tails
-            GASDistribution::NIG(_) => vec![1.5, 0.0, 1.0, 0.0],       // alpha, beta, delta, mu - optimized for asymmetry
-            GASDistribution::GLD(_) => vec![0.0, 1.0, 0.5, 1.5],       // lambda1, lambda2, lambda3, lambda4 - optimized for flexibility
+            GASDistribution::VG(_) => vec![0.5, 0.0, 1.0, 0.0], // nu, theta, sigma, mu - optimized for heavy tails
+            GASDistribution::NIG(_) => vec![1.5, 0.0, 1.0, 0.0], // alpha, beta, delta, mu - optimized for asymmetry
+            GASDistribution::GLD(_) => vec![0.0, 1.0, 0.5, 1.5], // lambda1, lambda2, lambda3, lambda4 - optimized for flexibility
         };
 
         Self {
             distribution,
-            omega: 0.01,  // Reduced constant term for crypto volatility
-            alpha: 0.15,  // Increased ARCH effect for sudden volatility changes
-            beta: 0.82,   // Slightly higher persistence for crypto markets
-            kappa: 0.8,   // Score scaling parameter for better convergence
+            omega: 0.01, // Reduced constant term for crypto volatility
+            alpha: 0.15, // Increased ARCH effect for sudden volatility changes
+            beta: 0.82,  // Slightly higher persistence for crypto markets
+            kappa: 0.8,  // Score scaling parameter for better convergence
             parameters,
             scores: Vec::with_capacity(max_history),
             variances: Vec::with_capacity(max_history),
@@ -508,7 +529,13 @@ impl ModelPredictor for GASModel {
         let volatility = self.get_volatility();
         // Lower volatility suggests upward movement, higher suggests caution
         // Reduced signal strength for better ensemble balance
-        let signal = if volatility < 0.02 { 0.4 } else if volatility > 0.05 { -0.4 } else { 0.0 };
+        let signal = if volatility < 0.02 {
+            0.4
+        } else if volatility > 0.05 {
+            -0.4
+        } else {
+            0.0
+        };
         Some(signal)
     }
 }
@@ -517,8 +544,8 @@ impl ModelPredictor for GASModel {
 pub struct HybridGASRF {
     pub gas_model: GASModel,
     pub rf_model: Option<RandomForestRegressor<f64, f64, DenseMatrix<f64>, Vec<f64>>>,
-    pub gas_weight: f64,  // Weight for GAS model (0.0-1.0)
-    pub rf_weight: f64,   // Weight for Random Forest model (0.0-1.0)
+    pub gas_weight: f64, // Weight for GAS model (0.0-1.0)
+    pub rf_weight: f64,  // Weight for Random Forest model (0.0-1.0)
 }
 
 impl HybridGASRF {
@@ -528,14 +555,15 @@ impl HybridGASRF {
         Self {
             gas_model,
             rf_model: None,  // Will be set during training
-            gas_weight: 0.6,  // GAS gets higher weight due to better volatility modeling
-            rf_weight: 0.4,   // RF gets lower weight for pattern recognition
+            gas_weight: 0.6, // GAS gets higher weight due to better volatility modeling
+            rf_weight: 0.4,  // RF gets lower weight for pattern recognition
         }
     }
 
     pub fn predict(&self, features: &[f64]) -> Option<f64> {
         // Get GAS model prediction (directional signal)
-        let gas_signal = if let Some(_current_price) = Some(1.0) { // Placeholder - will be passed from predictor
+        let gas_signal = if let Some(_current_price) = Some(1.0) {
+            // Placeholder - will be passed from predictor
             // Simplified GAS signal calculation
             let volatility = self.gas_model.get_volatility();
             let base_signal = if volatility > 0.02 { -0.5 } else { 0.5 }; // Conservative in high vol
@@ -585,18 +613,21 @@ pub struct SimpleMLPredictor {
     ema26: Option<f64>,
     volatility_sum_sq: f64,
     volume_sma_sum: f64,
-    id: u64, // Unique ID for debugging
-    pub model_type: String, // Model type for training
+    id: u64,                              // Unique ID for debugging
+    pub model_type: String,               // Model type for training
     pub var_risk_manager: VaRRiskManager, // VaR-based risk management
-    pub gas_model: Option<GASModel>, // GAS model for volatility modeling
-    pub trained: bool, // Flag to prevent retraining
+    pub gas_model: Option<GASModel>,      // GAS model for volatility modeling
+    pub trained: bool,                    // Flag to prevent retraining
 }
 
 #[allow(dead_code)]
 impl SimpleMLPredictor {
     pub fn new(window_size: usize) -> Self {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let id = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         println!("🆔 Created SimpleMLPredictor with ID: {}", id);
         Self {
             model: None,
@@ -614,9 +645,9 @@ impl SimpleMLPredictor {
             volume_sma_sum: 0.0,
             id,
             model_type: "hybrid_egarch_lstm".to_string(), // Default model type
-            var_risk_manager: VaRRiskManager::new(1000), // Track last 1000 returns
-            gas_model: None, // Initialize GAS model as None
-            trained: false, // Initialize training flag
+            var_risk_manager: VaRRiskManager::new(1000),  // Track last 1000 returns
+            gas_model: None,                              // Initialize GAS model as None
+            trained: false,                               // Initialize training flag
         }
     }
 
@@ -629,8 +660,18 @@ impl SimpleMLPredictor {
             let _prev_volume = self.trades.back().unwrap().volume;
 
             // Update SMA sums
-            self.sma5_sum += price - if self.trades.len() >= 5 { self.trades[self.trades.len() - 5].price } else { 0.0 };
-            self.sma10_sum += price - if self.trades.len() >= 10 { self.trades[self.trades.len() - 10].price } else { 0.0 };
+            self.sma5_sum += price
+                - if self.trades.len() >= 5 {
+                    self.trades[self.trades.len() - 5].price
+                } else {
+                    0.0
+                };
+            self.sma10_sum += price
+                - if self.trades.len() >= 10 {
+                    self.trades[self.trades.len() - 10].price
+                } else {
+                    0.0
+                };
 
             // Update RSI gains/losses
             let change = price - prev_price;
@@ -660,13 +701,19 @@ impl SimpleMLPredictor {
             });
 
             // Update volume SMA
-            self.volume_sma_sum += volume - if self.trades.len() >= 5 { self.trades[self.trades.len() - 5].volume } else { 0.0 };
+            self.volume_sma_sum += volume
+                - if self.trades.len() >= 5 {
+                    self.trades[self.trades.len() - 5].volume
+                } else {
+                    0.0
+                };
 
             // Update volatility (simplified rolling variance)
             if self.trades.len() >= 10 {
                 let old_price = self.trades[self.trades.len() - 10].price;
                 let current_sma = self.sma5_sum / 5.0; // Using SMA5 as approximation
-                self.volatility_sum_sq += (price - current_sma).powi(2) - (old_price - current_sma).powi(2);
+                self.volatility_sum_sq +=
+                    (price - current_sma).powi(2) - (old_price - current_sma).powi(2);
             }
         } else {
             // First trade - initialize
@@ -694,7 +741,10 @@ impl SimpleMLPredictor {
         } else if let Some(MLModel::HybridGASRF(_)) = self.model {
             // GAS-RF hybrid model doesn't need special add_trade handling
             // GAS model is updated separately below
-            println!("🎯 GAS-RF hybrid model active for trade {}", self.trades.len());
+            println!(
+                "🎯 GAS-RF hybrid model active for trade {}",
+                self.trades.len()
+            );
         } else {
             println!("🎯 No hybrid model yet for trade {}", self.trades.len());
         }
@@ -712,7 +762,8 @@ impl SimpleMLPredictor {
         }
 
         println!("📊 Trade count: {} (training at 50)", self.trades.len());
-        if self.trades.len() == 50 && !self.trained { // Need more trades for better training and not already trained
+        if self.trades.len() == 50 && !self.trained {
+            // Need more trades for better training and not already trained
             println!("🎯 Reached 50 trades - starting training");
             self.train_model(&self.model_type.clone());
             self.trained = true; // Set flag to prevent retraining
@@ -739,7 +790,13 @@ impl SimpleMLPredictor {
         if self.trades.len() < periods {
             return None;
         }
-        let prices: Vec<f64> = self.trades.iter().rev().take(periods).map(|t| t.price).collect();
+        let prices: Vec<f64> = self
+            .trades
+            .iter()
+            .rev()
+            .take(periods)
+            .map(|t| t.price)
+            .collect();
         let mean = prices.iter().sum::<f64>() / prices.len() as f64;
         let variance = prices.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / prices.len() as f64;
         Some(variance.sqrt())
@@ -770,66 +827,101 @@ impl SimpleMLPredictor {
     }
 
     pub fn train_model(&mut self, model_type: &str) {
-        println!("🔧 train_model called (ID: {}) with type: {}", self.id, model_type);
+        println!(
+            "🔧 train_model called (ID: {}) with type: {}",
+            self.id, model_type
+        );
         println!("📊 Current trades: {}", self.trades.len());
         let n = self.trades.len();
-        if n < 35 { // need more data for better training
+        if n < 35 {
+            // need more data for better training
             println!("Not enough trades for training: {}", n);
             return;
         }
         let mut features = Vec::new();
         let mut targets = Vec::new();
-        for i in 10..n-4 { // predict 3 trades ahead
+        for i in 10..n - 4 {
+            // predict 3 trades ahead
             let _price = self.trades[i].price;
             let _volume = self.trades[i].volume;
             // Use more robust features that work even in stable markets
-            let price_momentum = self.calculate_momentum_from_index(i-1, 5).unwrap_or(0.0);
+            let price_momentum = self.calculate_momentum_from_index(i - 1, 5).unwrap_or(0.0);
             let volume_change = if i >= 2 {
-                (self.trades[i-1].volume - self.trades[i-2].volume) / self.trades[i-2].volume.max(1.0)
-            } else { 0.0 };
-            let recent_volatility = self.calculate_volatility_from_index(i-1, 10).unwrap_or(0.001);
+                (self.trades[i - 1].volume - self.trades[i - 2].volume)
+                    / self.trades[i - 2].volume.max(1.0)
+            } else {
+                0.0
+            };
+            let recent_volatility = self
+                .calculate_volatility_from_index(i - 1, 10)
+                .unwrap_or(0.001);
 
             // Only use RSI and MACD if we have enough data
-            let rsi = if i >= 14 { self.calculate_rsi_from_index(i-1, 14).unwrap_or(50.0) } else { 50.0 };
-            let macd = if i >= 26 { self.calculate_macd_from_index(i-1).unwrap_or(0.0) } else { 0.0 };
+            let rsi = if i >= 14 {
+                self.calculate_rsi_from_index(i - 1, 14).unwrap_or(50.0)
+            } else {
+                50.0
+            };
+            let macd = if i >= 26 {
+                self.calculate_macd_from_index(i - 1).unwrap_or(0.0)
+            } else {
+                0.0
+            };
 
             // Add advanced technical indicators
-            let bollinger_position = self.calculate_bollinger_position_from_index(i-1, 20).unwrap_or(0.0);
-            let stochastic = self.calculate_stochastic_from_index(i-1, 14, 3).unwrap_or(50.0);
-            let williams_r = self.calculate_williams_r_from_index(i-1, 14).unwrap_or(-50.0);
-            let volume_ratio = self.calculate_volume_ratio_from_index(i-1, 10).unwrap_or(1.0);
-            let price_acceleration = self.calculate_price_acceleration_from_index(i-1, 5).unwrap_or(0.0);
+            let bollinger_position = self
+                .calculate_bollinger_position_from_index(i - 1, 20)
+                .unwrap_or(0.0);
+            let stochastic = self
+                .calculate_stochastic_from_index(i - 1, 14, 3)
+                .unwrap_or(50.0);
+            let williams_r = self
+                .calculate_williams_r_from_index(i - 1, 14)
+                .unwrap_or(-50.0);
+            let volume_ratio = self
+                .calculate_volume_ratio_from_index(i - 1, 10)
+                .unwrap_or(1.0);
+            let price_acceleration = self
+                .calculate_price_acceleration_from_index(i - 1, 5)
+                .unwrap_or(0.0);
 
             // Apply robust scaling and clipping to features during training
             let scaled_features = vec![
                 self.clip_and_scale(price_momentum, -0.1, 0.1), // Price momentum: clip to ±10%
                 self.clip_and_scale(volume_change, -2.0, 2.0),  // Volume change: clip to ±200%
                 self.clip_and_scale(recent_volatility, 0.0, 0.05), // Volatility: clip to 0-5%
-                rsi / 100.0, // RSI: already 0-1
-                self.clip_and_scale(macd, -0.01, 0.01), // MACD: clip to reasonable range
-                bollinger_position, // Already -1 to 1
-                stochastic / 100.0, // Stochastic: 0-1
-                (williams_r + 100.0) / 100.0, // Williams %R: 0-1
-                self.clip_and_scale(volume_ratio, 0.1, 5.0), // Volume ratio: clip to 0.1-5.0
+                rsi / 100.0,                                    // RSI: already 0-1
+                self.clip_and_scale(macd, -0.01, 0.01),         // MACD: clip to reasonable range
+                bollinger_position,                             // Already -1 to 1
+                stochastic / 100.0,                             // Stochastic: 0-1
+                (williams_r + 100.0) / 100.0,                   // Williams %R: 0-1
+                self.clip_and_scale(volume_ratio, 0.1, 5.0),    // Volume ratio: clip to 0.1-5.0
                 self.clip_and_scale(price_acceleration, -0.01, 0.01), // Price acceleration: clip to ±1%
             ];
-            
+
             features.push(scaled_features);
-            let future_price = self.trades[i+3].price; // predict 3 trades ahead
+            let future_price = self.trades[i + 3].price; // predict 3 trades ahead
             let current_price = self.trades[i].price;
             let price_change = (future_price - current_price) / current_price;
 
             // Improved target calculation: use significant price movements
             // Classify as BUY (1.0), SELL (-1.0), or HOLD (0.0) based on price change magnitude
-            let target = if price_change.abs() < 0.003 { // Less than 0.3% change = HOLD (was 0.5%)
+            let target = if price_change.abs() < 0.003 {
+                // Less than 0.3% change = HOLD (was 0.5%)
                 0.0
-            } else if price_change > 0.008 { // More than 0.8% gain = BUY signal (was 1%)
+            } else if price_change > 0.008 {
+                // More than 0.8% gain = BUY signal (was 1%)
                 1.0
-            } else if price_change < -0.008 { // More than 0.8% loss = SELL signal (was 1%)
+            } else if price_change < -0.008 {
+                // More than 0.8% loss = SELL signal (was 1%)
                 -1.0
             } else {
                 // Moderate changes (0.3% to 0.8%): use direction but weaker signal
-                if price_change > 0.0 { 0.6 } else { -0.6 } // Stronger weak signals
+                if price_change > 0.0 {
+                    0.6
+                } else {
+                    -0.6
+                } // Stronger weak signals
             };
             targets.push(target);
         }
@@ -850,21 +942,49 @@ impl SimpleMLPredictor {
 
         println!("Collected {} training samples", features.len());
         println!("Sample features: {:?}", &features[0..3]);
-        println!("Sample targets: {:.6}, {:.6}, {:.6}", targets[0], targets[1], targets[2]);
+        println!(
+            "Sample targets: {:.6}, {:.6}, {:.6}",
+            targets[0], targets[1], targets[2]
+        );
 
         // Check if we have sufficient variation in features
         let has_variation = features.iter().any(|f| f.iter().any(|&v| v.abs() > 0.001)); // Require more significant variation
         let target_variation = targets.iter().any(|&t: &f64| t.abs() > 1e-9_f64); // Very low threshold to allow training even with tiny movements
-        println!("🔍 Variation check: features={}, targets={}", has_variation, target_variation);
+        println!(
+            "🔍 Variation check: features={}, targets={}",
+            has_variation, target_variation
+        );
         if !has_variation || !target_variation {
             println!("Market too stable for ML training (features: {}, targets: {}) - switching to random trading mode for testing",
                     has_variation, target_variation);
-            println!("Feature variation check: min |f| = {:.2e}, max |f| = {:.2e}",
-                    features.iter().flatten().map(|&x| x.abs()).min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0),
-                    features.iter().flatten().map(|&x| x.abs()).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0));
-            println!("Target variation check: min |t| = {:.2e}, max |t| = {:.2e}",
-                    targets.iter().map(|&x: &f64| x.abs()).min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0_f64),
-                    targets.iter().map(|&x: &f64| x.abs()).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0_f64));
+            println!(
+                "Feature variation check: min |f| = {:.2e}, max |f| = {:.2e}",
+                features
+                    .iter()
+                    .flatten()
+                    .map(|&x| x.abs())
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(0.0),
+                features
+                    .iter()
+                    .flatten()
+                    .map(|&x| x.abs())
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(0.0)
+            );
+            println!(
+                "Target variation check: min |t| = {:.2e}, max |t| = {:.2e}",
+                targets
+                    .iter()
+                    .map(|&x: &f64| x.abs())
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(0.0_f64),
+                targets
+                    .iter()
+                    .map(|&x: &f64| x.abs())
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(0.0_f64)
+            );
             // Don't train model, but allow random trades for testing infrastructure
             return;
         }
@@ -915,7 +1035,12 @@ impl SimpleMLPredictor {
         match model_type {
             "random_forest" => {
                 // Convert to smartcore format (DenseMatrix and Vec)
-                match DenseMatrix::from_2d_array(&normalized_features.iter().map(|row| row.as_slice()).collect::<Vec<_>>()) {
+                match DenseMatrix::from_2d_array(
+                    &normalized_features
+                        .iter()
+                        .map(|row| row.as_slice())
+                        .collect::<Vec<_>>(),
+                ) {
                     Ok(x) => {
                         println!("✅ DenseMatrix created with shape: {:?}", x.shape());
                         let y = targets.to_vec();
@@ -970,7 +1095,10 @@ impl SimpleMLPredictor {
                 let mut gas_model = GASModel::new(GASDistribution::GHD(ghd_dist), 1000);
 
                 // Initialize with historical returns
-                let returns: Vec<f64> = self.trades.iter().skip(1)
+                let returns: Vec<f64> = self
+                    .trades
+                    .iter()
+                    .skip(1)
                     .zip(self.trades.iter())
                     .map(|(current, prev)| (current.price - prev.price) / prev.price)
                     .collect();
@@ -981,7 +1109,9 @@ impl SimpleMLPredictor {
 
                 // Store the GAS model
                 self.gas_model = Some(gas_model);
-                self.model = Some(MLModel::GAS(Box::new(self.gas_model.as_ref().unwrap().clone())));
+                self.model = Some(MLModel::GAS(Box::new(
+                    self.gas_model.as_ref().unwrap().clone(),
+                )));
                 println!("✅ GAS-GHD model trained and stored successfully!");
                 println!("🎯 Model is now active - switching to GAS-based trading");
             }
@@ -992,7 +1122,10 @@ impl SimpleMLPredictor {
                 let mut gas_model = GASModel::new(GASDistribution::VG(vg_dist), 1000);
 
                 // Initialize with historical returns
-                let returns: Vec<f64> = self.trades.iter().skip(1)
+                let returns: Vec<f64> = self
+                    .trades
+                    .iter()
+                    .skip(1)
                     .zip(self.trades.iter())
                     .map(|(current, prev)| (current.price - prev.price) / prev.price)
                     .collect();
@@ -1003,7 +1136,9 @@ impl SimpleMLPredictor {
 
                 // Store the GAS model
                 self.gas_model = Some(gas_model);
-                self.model = Some(MLModel::GAS(Box::new(self.gas_model.as_ref().unwrap().clone())));
+                self.model = Some(MLModel::GAS(Box::new(
+                    self.gas_model.as_ref().unwrap().clone(),
+                )));
                 println!("✅ GAS-VG model trained and stored successfully!");
                 println!("🎯 Model is now active - switching to GAS-based trading");
             }
@@ -1014,7 +1149,10 @@ impl SimpleMLPredictor {
                 let mut gas_model = GASModel::new(GASDistribution::NIG(nig_dist), 1000);
 
                 // Initialize with historical returns
-                let returns: Vec<f64> = self.trades.iter().skip(1)
+                let returns: Vec<f64> = self
+                    .trades
+                    .iter()
+                    .skip(1)
                     .zip(self.trades.iter())
                     .map(|(current, prev)| (current.price - prev.price) / prev.price)
                     .collect();
@@ -1025,7 +1163,9 @@ impl SimpleMLPredictor {
 
                 // Store the GAS model
                 self.gas_model = Some(gas_model);
-                self.model = Some(MLModel::GAS(Box::new(self.gas_model.as_ref().unwrap().clone())));
+                self.model = Some(MLModel::GAS(Box::new(
+                    self.gas_model.as_ref().unwrap().clone(),
+                )));
                 println!("✅ GAS-NIG model trained and stored successfully!");
                 println!("🎯 Model is now active - switching to GAS-based trading");
             }
@@ -1036,7 +1176,10 @@ impl SimpleMLPredictor {
                 let mut gas_model = GASModel::new(GASDistribution::GLD(gld_dist), 1000);
 
                 // Initialize with historical returns
-                let returns: Vec<f64> = self.trades.iter().skip(1)
+                let returns: Vec<f64> = self
+                    .trades
+                    .iter()
+                    .skip(1)
                     .zip(self.trades.iter())
                     .map(|(current, prev)| (current.price - prev.price) / prev.price)
                     .collect();
@@ -1047,7 +1190,9 @@ impl SimpleMLPredictor {
 
                 // Store the GAS model
                 self.gas_model = Some(gas_model);
-                self.model = Some(MLModel::GAS(Box::new(self.gas_model.as_ref().unwrap().clone())));
+                self.model = Some(MLModel::GAS(Box::new(
+                    self.gas_model.as_ref().unwrap().clone(),
+                )));
                 println!("✅ GAS-GLD model trained and stored successfully!");
                 println!("🎯 Model is now active - switching to GAS-based trading");
             }
@@ -1059,7 +1204,10 @@ impl SimpleMLPredictor {
                 let mut gas_model = GASModel::new(GASDistribution::GLD(gld_dist), 1000);
 
                 // Initialize with historical returns
-                let returns: Vec<f64> = self.trades.iter().skip(1)
+                let returns: Vec<f64> = self
+                    .trades
+                    .iter()
+                    .skip(1)
                     .zip(self.trades.iter())
                     .map(|(current, prev)| (current.price - prev.price) / prev.price)
                     .collect();
@@ -1069,9 +1217,17 @@ impl SimpleMLPredictor {
                 }
 
                 // Train Random Forest on the same data
-                let rf_model = match DenseMatrix::from_2d_array(&normalized_features.iter().map(|row| row.as_slice()).collect::<Vec<_>>()) {
+                let rf_model = match DenseMatrix::from_2d_array(
+                    &normalized_features
+                        .iter()
+                        .map(|row| row.as_slice())
+                        .collect::<Vec<_>>(),
+                ) {
                     Ok(x) => {
-                        println!("✅ DenseMatrix created for RF training with shape: {:?}", x.shape());
+                        println!(
+                            "✅ DenseMatrix created for RF training with shape: {:?}",
+                            x.shape()
+                        );
                         let y = targets.to_vec();
 
                         match RandomForestRegressor::fit(&x, &y, smartcore::ensemble::random_forest_regressor::RandomForestRegressorParameters::default()
@@ -1096,7 +1252,10 @@ impl SimpleMLPredictor {
                 };
 
                 // Create hybrid model
-                let mut hybrid_model = HybridGASRF::new(GASDistribution::GLD(GeneralizedLambda::new(0.0, 1.0, 1.0, 1.0)), 1000);
+                let mut hybrid_model = HybridGASRF::new(
+                    GASDistribution::GLD(GeneralizedLambda::new(0.0, 1.0, 1.0, 1.0)),
+                    1000,
+                );
                 hybrid_model.gas_model = gas_model.clone();
                 hybrid_model.rf_model = rf_model;
 
@@ -1119,15 +1278,19 @@ impl SimpleMLPredictor {
                 // Use the same targets as other models (price change 3 trades ahead)
                 let mut targets = Vec::new();
                 let n = self.trades.len();
-                for i in 10..n-4 {
-                    let future_price = self.trades[i+3].price;
+                for i in 10..n - 4 {
+                    let future_price = self.trades[i + 3].price;
                     let current_price = self.trades[i].price;
                     let price_change = (future_price - current_price) / current_price;
                     targets.push(price_change);
                 }
 
-                println!("🎯 Training with {} samples (features: {}, targets: {})",
-                    targets.len(), normalized_features.len(), targets.len());
+                println!(
+                    "🎯 Training with {} samples (features: {}, targets: {})",
+                    targets.len(),
+                    normalized_features.len(),
+                    targets.len()
+                );
 
                 // Train the ensemble
                 ensemble.train(&prices, &volumes, &normalized_features, &targets);
@@ -1145,15 +1308,24 @@ impl SimpleMLPredictor {
     }
 
     fn train_linear_regression(&mut self, normalized_features: &[Vec<f64>], targets: &[f64]) {
-        println!("train_linear_regression called with {} samples", normalized_features.len());
-        let x = Array2::from_shape_vec((normalized_features.len(), normalized_features[0].len()),
-                                      normalized_features.iter().flatten().cloned().collect()).unwrap();
+        println!(
+            "train_linear_regression called with {} samples",
+            normalized_features.len()
+        );
+        let x = Array2::from_shape_vec(
+            (normalized_features.len(), normalized_features[0].len()),
+            normalized_features.iter().flatten().cloned().collect(),
+        )
+        .unwrap();
         let y = Array1::from_vec(targets.to_vec());
         let dataset = Dataset::new(x, y);
         match LinearRegression::default().fit(&dataset) {
             Ok(model) => {
                 self.model = Some(MLModel::LinearRegression(model));
-                println!("Linear Regression model trained successfully with {} samples", dataset.nsamples());
+                println!(
+                    "Linear Regression model trained successfully with {} samples",
+                    dataset.nsamples()
+                );
             }
             Err(e) => {
                 println!("❌ Linear Regression training failed: {:?}", e);
@@ -1164,19 +1336,27 @@ impl SimpleMLPredictor {
     // Advanced Technical Indicators for Better ML Predictions
 
     fn calculate_bollinger_position_from_index(&self, index: usize, period: usize) -> Option<f64> {
-        if index < period { return None; }
-        
+        if index < period {
+            return None;
+        }
+
         let start = index.saturating_sub(period - 1);
-        let prices: Vec<f64> = self.trades.iter().skip(start).take(period).map(|t| t.price).collect();
-        
+        let prices: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(period)
+            .map(|t| t.price)
+            .collect();
+
         let sma = prices.iter().sum::<f64>() / prices.len() as f64;
         let variance = prices.iter().map(|p| (p - sma).powi(2)).sum::<f64>() / prices.len() as f64;
         let std_dev = variance.sqrt();
-        
+
         let upper_band = sma + (2.0 * std_dev);
         let lower_band = sma - (2.0 * std_dev);
         let current_price = self.trades[index].price;
-        
+
         // Return position within bands: -1 (lower) to +1 (upper)
         if upper_band == lower_band {
             Some(0.0)
@@ -1185,16 +1365,31 @@ impl SimpleMLPredictor {
         }
     }
 
-    fn calculate_stochastic_from_index(&self, index: usize, k_period: usize, _d_period: usize) -> Option<f64> {
-        if index < k_period { return None; }
-        
+    fn calculate_stochastic_from_index(
+        &self,
+        index: usize,
+        k_period: usize,
+        _d_period: usize,
+    ) -> Option<f64> {
+        if index < k_period {
+            return None;
+        }
+
         let start = index.saturating_sub(k_period - 1);
-        let recent_prices: Vec<f64> = self.trades.iter().skip(start).take(k_period).map(|t| t.price).collect();
-        
-        let highest = recent_prices.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let recent_prices: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(k_period)
+            .map(|t| t.price)
+            .collect();
+
+        let highest = recent_prices
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
         let lowest = recent_prices.iter().fold(f64::INFINITY, |a, &b| a.min(b));
         let current = self.trades[index].price;
-        
+
         if highest == lowest {
             Some(50.0) // Neutral when no range
         } else {
@@ -1203,15 +1398,25 @@ impl SimpleMLPredictor {
     }
 
     fn calculate_williams_r_from_index(&self, index: usize, period: usize) -> Option<f64> {
-        if index < period { return None; }
-        
+        if index < period {
+            return None;
+        }
+
         let start = index.saturating_sub(period - 1);
-        let recent_prices: Vec<f64> = self.trades.iter().skip(start).take(period).map(|t| t.price).collect();
-        
-        let highest = recent_prices.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let recent_prices: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(period)
+            .map(|t| t.price)
+            .collect();
+
+        let highest = recent_prices
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
         let lowest = recent_prices.iter().fold(f64::INFINITY, |a, &b| a.min(b));
         let current = self.trades[index].price;
-        
+
         if highest == lowest {
             Some(-50.0) // Neutral
         } else {
@@ -1220,14 +1425,22 @@ impl SimpleMLPredictor {
     }
 
     fn calculate_volume_ratio_from_index(&self, index: usize, period: usize) -> Option<f64> {
-        if index < period { return None; }
-        
+        if index < period {
+            return None;
+        }
+
         let start = index.saturating_sub(period - 1);
-        let recent_volumes: Vec<f64> = self.trades.iter().skip(start).take(period).map(|t| t.volume).collect();
+        let recent_volumes: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(period)
+            .map(|t| t.volume)
+            .collect();
         let current_volume = self.trades[index].volume;
-        
+
         let avg_volume = recent_volumes.iter().sum::<f64>() / recent_volumes.len() as f64;
-        
+
         if avg_volume == 0.0 {
             Some(1.0)
         } else {
@@ -1236,33 +1449,43 @@ impl SimpleMLPredictor {
     }
 
     fn calculate_price_acceleration_from_index(&self, index: usize, period: usize) -> Option<f64> {
-        if index < period + 1 { return None; }
-        
+        if index < period + 1 {
+            return None;
+        }
+
         // Calculate rate of change of momentum (acceleration)
         let current_momentum = self.calculate_momentum_from_index(index, period)?;
         let previous_momentum = self.calculate_momentum_from_index(index - 1, period)?;
-        
+
         Some(current_momentum - previous_momentum)
     }
 
     pub fn calculate_rsi_from_index(&self, index: usize, period: usize) -> Option<f64> {
-        if index < period { return None; }
-        
+        if index < period {
+            return None;
+        }
+
         let start = index.saturating_sub(period - 1);
-        let prices: Vec<f64> = self.trades.iter().skip(start).take(period).map(|t| t.price).collect();
-        
+        let prices: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(period)
+            .map(|t| t.price)
+            .collect();
+
         let mut gains = 0.0;
         let mut losses = 0.0;
-        
+
         for i in 1..prices.len() {
-            let change = prices[i] - prices[i-1];
+            let change = prices[i] - prices[i - 1];
             if change > 0.0 {
                 gains += change;
             } else {
                 losses -= change;
             }
         }
-        
+
         if losses == 0.0 {
             Some(100.0)
         } else {
@@ -1272,89 +1495,145 @@ impl SimpleMLPredictor {
     }
 
     fn calculate_volume_sma_from_index(&self, index: usize, periods: usize) -> Option<f64> {
-        if index < periods { return None; }
-        
+        if index < periods {
+            return None;
+        }
+
         let start = index.saturating_sub(periods - 1);
-        let volumes: Vec<f64> = self.trades.iter().skip(start).take(periods).map(|t| t.volume).collect();
-        
+        let volumes: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(periods)
+            .map(|t| t.volume)
+            .collect();
+
         Some(volumes.iter().sum::<f64>() / volumes.len() as f64)
     }
 
     pub fn calculate_momentum_from_index(&self, index: usize, periods: usize) -> Option<f64> {
-        if index < periods { return None; }
-        
+        if index < periods {
+            return None;
+        }
+
         let current_price = self.trades[index].price;
         let past_price = self.trades[index - periods].price;
-        
+
         Some((current_price - past_price) / past_price)
     }
 
     pub fn calculate_macd_from_index(&self, index: usize) -> Option<f64> {
-        if index < 26 { return None; }
-        
+        if index < 26 {
+            return None;
+        }
+
         // Calculate EMAs
         let mut ema12;
         let mut ema26;
-        
+
         let start = index.saturating_sub(25);
-        let prices: Vec<f64> = self.trades.iter().skip(start).take(26).map(|t| t.price).collect();
-        
+        let prices: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(26)
+            .map(|t| t.price)
+            .collect();
+
         // Initialize EMAs with first price
         ema12 = prices[0];
         ema26 = prices[0];
-        
+
         // Calculate EMAs
         let multiplier12 = 2.0 / (12.0 + 1.0);
         let multiplier26 = 2.0 / (26.0 + 1.0);
-        
+
         for &price in &prices[1..] {
             ema12 = (price - ema12) * multiplier12 + ema12;
             ema26 = (price - ema26) * multiplier26 + ema26;
         }
-        
+
         Some(ema12 - ema26)
     }
 
-    fn calculate_bollinger_upper_from_index(&self, index: usize, period: usize, std_dev: f64) -> Option<f64> {
-        if index < period { return None; }
-        
+    fn calculate_bollinger_upper_from_index(
+        &self,
+        index: usize,
+        period: usize,
+        std_dev: f64,
+    ) -> Option<f64> {
+        if index < period {
+            return None;
+        }
+
         let start = index.saturating_sub(period - 1);
-        let prices: Vec<f64> = self.trades.iter().skip(start).take(period).map(|t| t.price).collect();
-        
+        let prices: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(period)
+            .map(|t| t.price)
+            .collect();
+
         let sma = prices.iter().sum::<f64>() / prices.len() as f64;
         let variance = prices.iter().map(|p| (p - sma).powi(2)).sum::<f64>() / prices.len() as f64;
         let std = variance.sqrt();
-        
+
         Some(sma + (std_dev * std))
     }
 
-    fn calculate_bollinger_lower_from_index(&self, index: usize, period: usize, std_dev: f64) -> Option<f64> {
-        if index < period { return None; }
-        
+    fn calculate_bollinger_lower_from_index(
+        &self,
+        index: usize,
+        period: usize,
+        std_dev: f64,
+    ) -> Option<f64> {
+        if index < period {
+            return None;
+        }
+
         let start = index.saturating_sub(period - 1);
-        let prices: Vec<f64> = self.trades.iter().skip(start).take(period).map(|t| t.price).collect();
-        
+        let prices: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(period)
+            .map(|t| t.price)
+            .collect();
+
         let sma = prices.iter().sum::<f64>() / prices.len() as f64;
         let variance = prices.iter().map(|p| (p - sma).powi(2)).sum::<f64>() / prices.len() as f64;
         let std = variance.sqrt();
-        
+
         Some(sma - (std_dev * std))
     }
 
     fn calculate_volatility_from_index(&self, index: usize, periods: usize) -> Option<f64> {
-        if index < periods { return None; }
-        
+        if index < periods {
+            return None;
+        }
+
         let start = index.saturating_sub(periods - 1);
-        let prices: Vec<f64> = self.trades.iter().skip(start).take(periods).map(|t| t.price).collect();
-        
+        let prices: Vec<f64> = self
+            .trades
+            .iter()
+            .skip(start)
+            .take(periods)
+            .map(|t| t.price)
+            .collect();
+
         let mean = prices.iter().sum::<f64>() / prices.len() as f64;
         let variance = prices.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / prices.len() as f64;
-        
+
         Some(variance.sqrt())
     }
 
     pub fn predict_next(&self) -> Option<f64> {
-        println!("🔍 predict_next called - model: {:?}, trades: {}", self.model.is_some(), self.trades.len());
+        println!(
+            "🔍 predict_next called - model: {:?}, trades: {}",
+            self.model.is_some(),
+            self.trades.len()
+        );
         if self.model.is_none() || self.trades.len() < 10 {
             return None;
         }
@@ -1362,41 +1641,64 @@ impl SimpleMLPredictor {
         println!("🔍 predict_next called with {} trades", self.trades.len());
 
         // Extract current features with improved scaling
-        let price_momentum = self.calculate_momentum_from_index(self.trades.len() - 1, 5).unwrap_or(0.0);
+        let price_momentum = self
+            .calculate_momentum_from_index(self.trades.len() - 1, 5)
+            .unwrap_or(0.0);
         let volume_change = if self.trades.len() >= 2 {
             let current_vol = self.trades.back().unwrap().volume;
             let prev_vol = self.trades[self.trades.len() - 2].volume;
             (current_vol - prev_vol) / prev_vol.max(1.0)
-        } else { 0.0 };
-        let recent_volatility = self.calculate_volatility_from_index(self.trades.len() - 1, 10).unwrap_or(0.001);
-        let rsi = self.calculate_rsi_from_index(self.trades.len() - 1, 14).unwrap_or(50.0);
-        let macd = self.calculate_macd_from_index(self.trades.len() - 1).unwrap_or(0.0);
-        
+        } else {
+            0.0
+        };
+        let recent_volatility = self
+            .calculate_volatility_from_index(self.trades.len() - 1, 10)
+            .unwrap_or(0.001);
+        let rsi = self
+            .calculate_rsi_from_index(self.trades.len() - 1, 14)
+            .unwrap_or(50.0);
+        let macd = self
+            .calculate_macd_from_index(self.trades.len() - 1)
+            .unwrap_or(0.0);
+
         // Add advanced indicators
-        let bollinger_position = self.calculate_bollinger_position_from_index(self.trades.len() - 1, 20).unwrap_or(0.0);
-        let stochastic = self.calculate_stochastic_from_index(self.trades.len() - 1, 14, 3).unwrap_or(50.0);
-        let williams_r = self.calculate_williams_r_from_index(self.trades.len() - 1, 14).unwrap_or(-50.0);
-        let volume_ratio = self.calculate_volume_ratio_from_index(self.trades.len() - 1, 10).unwrap_or(1.0);
-        let price_acceleration = self.calculate_price_acceleration_from_index(self.trades.len() - 1, 5).unwrap_or(0.0);
+        let bollinger_position = self
+            .calculate_bollinger_position_from_index(self.trades.len() - 1, 20)
+            .unwrap_or(0.0);
+        let stochastic = self
+            .calculate_stochastic_from_index(self.trades.len() - 1, 14, 3)
+            .unwrap_or(50.0);
+        let williams_r = self
+            .calculate_williams_r_from_index(self.trades.len() - 1, 14)
+            .unwrap_or(-50.0);
+        let volume_ratio = self
+            .calculate_volume_ratio_from_index(self.trades.len() - 1, 10)
+            .unwrap_or(1.0);
+        let price_acceleration = self
+            .calculate_price_acceleration_from_index(self.trades.len() - 1, 5)
+            .unwrap_or(0.0);
 
         // Apply robust scaling and clipping to prevent outliers
         let features = [
             self.clip_and_scale(price_momentum, -0.1, 0.1), // Price momentum: clip to ±10%
             self.clip_and_scale(volume_change, -2.0, 2.0),  // Volume change: clip to ±200%
             self.clip_and_scale(recent_volatility, 0.0, 0.05), // Volatility: clip to 0-5%
-            rsi / 100.0, // RSI: already 0-1
-            self.clip_and_scale(macd, -0.01, 0.01), // MACD: clip to reasonable range
-            bollinger_position, // Already -1 to 1
-            stochastic / 100.0, // Stochastic: 0-1
-            (williams_r + 100.0) / 100.0, // Williams %R: 0-1
-            self.clip_and_scale(volume_ratio, 0.1, 5.0), // Volume ratio: clip to 0.1-5.0
+            rsi / 100.0,                                    // RSI: already 0-1
+            self.clip_and_scale(macd, -0.01, 0.01),         // MACD: clip to reasonable range
+            bollinger_position,                             // Already -1 to 1
+            stochastic / 100.0,                             // Stochastic: 0-1
+            (williams_r + 100.0) / 100.0,                   // Williams %R: 0-1
+            self.clip_and_scale(volume_ratio, 0.1, 5.0),    // Volume ratio: clip to 0.1-5.0
             self.clip_and_scale(price_acceleration, -0.01, 0.01), // Price acceleration: clip to ±1%
         ];
 
         // Normalize features using stored parameters
         let mut normalized_features = Vec::new();
         for (i, &val) in features.iter().enumerate() {
-            if i < self.feature_means.len() && i < self.feature_stds.len() && self.feature_stds[i] > 0.0 {
+            if i < self.feature_means.len()
+                && i < self.feature_stds.len()
+                && self.feature_stds[i] > 0.0
+            {
                 let normalized = (val - self.feature_means[i]) / self.feature_stds[i];
                 // Additional clipping of normalized values to prevent extreme outliers
                 normalized_features.push(normalized.clamp(-3.0, 3.0));
@@ -1417,7 +1719,9 @@ impl SimpleMLPredictor {
                 }
             }
             Some(MLModel::LinearRegression(model)) => {
-                let input = Array2::from_shape_vec((1, normalized_features.len()), normalized_features).ok()?;
+                let input =
+                    Array2::from_shape_vec((1, normalized_features.len()), normalized_features)
+                        .ok()?;
                 let prediction = model.predict(&input);
                 prediction.get(0).copied()
             }
@@ -1435,7 +1739,8 @@ impl SimpleMLPredictor {
                     let volume_signal = self.calculate_volume_signal()?;
 
                     // Combine multiple signals with weights
-                    let combined_signal = 0.5 * trend_signal + 0.3 * momentum_signal + 0.2 * volume_signal;
+                    let combined_signal =
+                        0.5 * trend_signal + 0.3 * momentum_signal + 0.2 * volume_signal;
 
                     // Apply volatility scaling - higher volatility reduces signal strength
                     let volatility_factor = 1.0 / (1.0 + volatility * 2.0); // Dampens signal in high vol
@@ -1443,13 +1748,17 @@ impl SimpleMLPredictor {
 
                     // Add controlled noise to prevent over-fitting
                     use std::time::{SystemTime, UNIX_EPOCH};
-                    let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+                    let seed = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos() as u64;
                     let noise = ((seed % 100) as f64 / 100.0 - 0.5) * 0.05; // Reduced noise
 
                     let final_signal = (scaled_signal + noise).clamp(-1.0, 1.0);
 
                     // Apply threshold to reduce false signals
-                    if final_signal.abs() > 0.05 { // Only trade on stronger signals
+                    if final_signal.abs() > 0.05 {
+                        // Only trade on stronger signals
                         Some(final_signal)
                     } else {
                         Some(0.0) // Neutral signal
@@ -1468,24 +1777,32 @@ impl SimpleMLPredictor {
                     let volume_signal = self.calculate_volume_signal()?;
 
                     // GAS component: volatility-aware directional signal
-                    let gas_combined_signal = 0.5 * trend_signal + 0.3 * momentum_signal + 0.2 * volume_signal;
+                    let gas_combined_signal =
+                        0.5 * trend_signal + 0.3 * momentum_signal + 0.2 * volume_signal;
                     let volatility_factor = 1.0 / (1.0 + volatility * 2.0);
                     let gas_signal = gas_combined_signal * volatility_factor;
 
                     // RF component: pattern recognition prediction
                     let rf_prediction = if let Some(rf_model) = &model.rf_model {
-                        rf_model.predict(&DenseMatrix::from_2d_array(&[&normalized_features]).ok()?)
-                            .ok()?.first().copied()
+                        rf_model
+                            .predict(&DenseMatrix::from_2d_array(&[&normalized_features]).ok()?)
+                            .ok()?
+                            .first()
+                            .copied()
                     } else {
                         Some(0.0)
                     };
 
                     // Combine GAS and RF with weights
                     if let Some(rf_pred) = rf_prediction {
-                        let combined_signal = model.gas_weight * gas_signal + model.rf_weight * rf_pred;
+                        let combined_signal =
+                            model.gas_weight * gas_signal + model.rf_weight * rf_pred;
 
                         // Add controlled noise to prevent over-fitting
-                        let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+                        let seed = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos() as u64;
                         let noise = ((seed % 100) as f64 / 100.0 - 0.5) * 0.03; // Reduced noise for hybrid
 
                         let final_signal = (combined_signal + noise).clamp(-1.0, 1.0);
@@ -1498,7 +1815,10 @@ impl SimpleMLPredictor {
                         }
                     } else {
                         // Fallback to GAS only
-                        let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+                        let seed = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos() as u64;
                         let noise = ((seed % 100) as f64 / 100.0 - 0.5) * 0.03;
                         let final_signal = (gas_signal + noise).clamp(-1.0, 1.0);
                         if final_signal.abs() > 0.05 {
@@ -1547,17 +1867,31 @@ impl SimpleMLPredictor {
             let current_vol = self.trades[index].volume;
             let prev_vol = self.trades[index - 1].volume;
             (current_vol - prev_vol) / prev_vol.max(1.0)
-        } else { 0.0 };
-        let recent_volatility = self.calculate_volatility_from_index(index, 10).unwrap_or(0.001);
+        } else {
+            0.0
+        };
+        let recent_volatility = self
+            .calculate_volatility_from_index(index, 10)
+            .unwrap_or(0.001);
         let rsi = self.calculate_rsi_from_index(index, 14).unwrap_or(50.0);
         let macd = self.calculate_macd_from_index(index).unwrap_or(0.0);
 
         // Add advanced indicators
-        let bollinger_position = self.calculate_bollinger_position_from_index(index, 20).unwrap_or(0.0);
-        let stochastic = self.calculate_stochastic_from_index(index, 14, 3).unwrap_or(50.0);
-        let williams_r = self.calculate_williams_r_from_index(index, 14).unwrap_or(-50.0);
-        let volume_ratio = self.calculate_volume_ratio_from_index(index, 10).unwrap_or(1.0);
-        let price_acceleration = self.calculate_price_acceleration_from_index(index, 5).unwrap_or(0.0);
+        let bollinger_position = self
+            .calculate_bollinger_position_from_index(index, 20)
+            .unwrap_or(0.0);
+        let stochastic = self
+            .calculate_stochastic_from_index(index, 14, 3)
+            .unwrap_or(50.0);
+        let williams_r = self
+            .calculate_williams_r_from_index(index, 14)
+            .unwrap_or(-50.0);
+        let volume_ratio = self
+            .calculate_volume_ratio_from_index(index, 10)
+            .unwrap_or(1.0);
+        let price_acceleration = self
+            .calculate_price_acceleration_from_index(index, 5)
+            .unwrap_or(0.0);
 
         // Apply robust scaling and clipping
         let features = [
@@ -1576,7 +1910,10 @@ impl SimpleMLPredictor {
         // Normalize features using stored parameters
         let mut normalized_features = Vec::new();
         for (i, &val) in features.iter().enumerate() {
-            if i < self.feature_means.len() && i < self.feature_stds.len() && self.feature_stds[i] > 0.0 {
+            if i < self.feature_means.len()
+                && i < self.feature_stds.len()
+                && self.feature_stds[i] > 0.0
+            {
                 let normalized = (val - self.feature_means[i]) / self.feature_stds[i];
                 normalized_features.push(normalized.clamp(-3.0, 3.0));
             } else {
@@ -1650,7 +1987,14 @@ impl SimpleMLPredictor {
 
         // Volume trend analysis
         let recent_volumes: Vec<f64> = self.trades.iter().rev().take(5).map(|t| t.volume).collect();
-        let older_volumes: Vec<f64> = self.trades.iter().rev().skip(5).take(5).map(|t| t.volume).collect();
+        let older_volumes: Vec<f64> = self
+            .trades
+            .iter()
+            .rev()
+            .skip(5)
+            .take(5)
+            .map(|t| t.volume)
+            .collect();
 
         let recent_avg = recent_volumes.iter().sum::<f64>() / recent_volumes.len() as f64;
         let older_avg = older_volumes.iter().sum::<f64>() / older_volumes.len() as f64;
@@ -1668,10 +2012,10 @@ impl SimpleMLPredictor {
 /// EGARCH (Exponential GARCH) volatility model for asymmetric volatility modeling
 #[derive(Debug, Clone)]
 pub struct EGARCHModel {
-    omega: f64,  // Constant term
-    alpha: f64,  // ARCH parameter
-    gamma: f64,  // Asymmetry parameter (leverage effect)
-    beta: f64,   // GARCH parameter
+    omega: f64, // Constant term
+    alpha: f64, // ARCH parameter
+    gamma: f64, // Asymmetry parameter (leverage effect)
+    beta: f64,  // GARCH parameter
     returns: Vec<f64>,
     log_volatility: Vec<f64>,
 }
@@ -1712,7 +2056,10 @@ impl EGARCHModel {
             let innovation = (abs_ret - expected_abs) / self.get_volatility();
             let asymmetry = ret / self.get_volatility();
 
-            let new_log_vol = self.omega + self.alpha * innovation + self.gamma * asymmetry + self.beta * prev_vol;
+            let new_log_vol = self.omega
+                + self.alpha * innovation
+                + self.gamma * asymmetry
+                + self.beta * prev_vol;
             self.log_volatility.push(new_log_vol);
         }
     }
@@ -1742,7 +2089,8 @@ impl EGARCHModel {
             for alpha in [0.05, 0.1, 0.15, 0.2] {
                 for gamma in [-0.1, -0.05, 0.0, 0.05, 0.1] {
                     for beta in [0.7, 0.8, 0.85, 0.9] {
-                        let likelihood = self.calculate_likelihood(returns, omega, alpha, gamma, beta);
+                        let likelihood =
+                            self.calculate_likelihood(returns, omega, alpha, gamma, beta);
                         if likelihood > best_likelihood {
                             best_likelihood = likelihood;
                             best_params = (omega, alpha, gamma, beta);
@@ -1765,7 +2113,14 @@ impl EGARCHModel {
         }
     }
 
-    fn calculate_likelihood(&self, returns: &[f64], omega: f64, alpha: f64, gamma: f64, beta: f64) -> f64 {
+    fn calculate_likelihood(
+        &self,
+        returns: &[f64],
+        omega: f64,
+        alpha: f64,
+        gamma: f64,
+        beta: f64,
+    ) -> f64 {
         let mut log_vol = vec![0.0; returns.len()];
         let mut likelihood = 0.0;
 
@@ -1773,18 +2128,21 @@ impl EGARCHModel {
             if i == 0 {
                 log_vol[i] = (returns[i] * returns[i]).ln().max(-10.0);
             } else {
-                let abs_ret = returns[i-1].abs();
+                let abs_ret = returns[i - 1].abs();
                 let expected_abs = 0.7979;
-                let vol_prev = log_vol[i-1].exp().sqrt();
+                let vol_prev = log_vol[i - 1].exp().sqrt();
                 let innovation = (abs_ret - expected_abs) / vol_prev;
-                let asymmetry = returns[i-1] / vol_prev;
+                let asymmetry = returns[i - 1] / vol_prev;
 
-                log_vol[i] = omega + alpha * innovation + gamma * asymmetry + beta * log_vol[i-1];
+                log_vol[i] = omega + alpha * innovation + gamma * asymmetry + beta * log_vol[i - 1];
             }
 
             let vol = log_vol[i].exp().sqrt();
             if vol > 0.0 {
-                likelihood += -0.5 * ((returns[i] / vol).powi(2) + (2.0 * std::f64::consts::PI).ln() + 2.0 * log_vol[i]);
+                likelihood += -0.5
+                    * ((returns[i] / vol).powi(2)
+                        + (2.0 * std::f64::consts::PI).ln()
+                        + 2.0 * log_vol[i]);
             }
         }
 
@@ -1832,23 +2190,41 @@ impl SimpleLSTM {
             input_size,
             hidden_size,
             output_size,
-            wi: (0..total_input_weights).map(|_| rng.gen_range(-0.1..0.1)).collect(),
-            ui: (0..total_recurrent_weights).map(|_| rng.gen_range(-0.1..0.1)).collect(),
+            wi: (0..total_input_weights)
+                .map(|_| rng.gen_range(-0.1..0.1))
+                .collect(),
+            ui: (0..total_recurrent_weights)
+                .map(|_| rng.gen_range(-0.1..0.1))
+                .collect(),
             bi: (0..hidden_size).map(|_| rng.gen_range(-0.1..0.1)).collect(),
 
-            wf: (0..total_input_weights).map(|_| rng.gen_range(-0.1..0.1)).collect(),
-            uf: (0..total_recurrent_weights).map(|_| rng.gen_range(-0.1..0.1)).collect(),
+            wf: (0..total_input_weights)
+                .map(|_| rng.gen_range(-0.1..0.1))
+                .collect(),
+            uf: (0..total_recurrent_weights)
+                .map(|_| rng.gen_range(-0.1..0.1))
+                .collect(),
             bf: (0..hidden_size).map(|_| rng.gen_range(-0.1..0.1)).collect(),
 
-            wg: (0..total_input_weights).map(|_| rng.gen_range(-0.1..0.1)).collect(),
-            ug: (0..total_recurrent_weights).map(|_| rng.gen_range(-0.1..0.1)).collect(),
+            wg: (0..total_input_weights)
+                .map(|_| rng.gen_range(-0.1..0.1))
+                .collect(),
+            ug: (0..total_recurrent_weights)
+                .map(|_| rng.gen_range(-0.1..0.1))
+                .collect(),
             bg: (0..hidden_size).map(|_| rng.gen_range(-0.1..0.1)).collect(),
 
-            wo: (0..total_input_weights).map(|_| rng.gen_range(-0.1..0.1)).collect(),
-            uo: (0..total_recurrent_weights).map(|_| rng.gen_range(-0.1..0.1)).collect(),
+            wo: (0..total_input_weights)
+                .map(|_| rng.gen_range(-0.1..0.1))
+                .collect(),
+            uo: (0..total_recurrent_weights)
+                .map(|_| rng.gen_range(-0.1..0.1))
+                .collect(),
             bo: (0..hidden_size).map(|_| rng.gen_range(-0.1..0.1)).collect(),
 
-            w_out: (0..hidden_size * output_size).map(|_| rng.gen_range(-0.1..0.1)).collect(),
+            w_out: (0..hidden_size * output_size)
+                .map(|_| rng.gen_range(-0.1..0.1))
+                .collect(),
             b_out: (0..output_size).map(|_| rng.gen_range(-0.1..0.1)).collect(),
         }
     }
@@ -1952,9 +2328,15 @@ impl SimpleLSTM {
     }
 
     /// Simple training using gradient descent (simplified)
-    pub fn train(&mut self, inputs: &[Vec<f64>], targets: &[f64], learning_rate: f64, epochs: usize) -> f64 {
+    pub fn train(
+        &mut self,
+        inputs: &[Vec<f64>],
+        targets: &[f64],
+        learning_rate: f64,
+        epochs: usize,
+    ) -> f64 {
         let mut total_loss = 0.0;
-        
+
         for _ in 0..epochs {
             let output = self.forward(inputs);
             let error = targets[0] - output[0]; // Simplified for single output
@@ -1970,7 +2352,7 @@ impl SimpleLSTM {
                 *b += scale * rand::random::<f64>();
             }
         }
-        
+
         total_loss / epochs as f64 // Return average loss
     }
 }
@@ -2010,7 +2392,10 @@ impl HybridEGARCHLSTM {
             self.feature_history.pop_front();
         }
 
-        println!("📊 Hybrid model feature_history length: {}", self.feature_history.len());
+        println!(
+            "📊 Hybrid model feature_history length: {}",
+            self.feature_history.len()
+        );
     }
 
     /// Create feature vector for LSTM input (normalized)
@@ -2020,7 +2405,7 @@ impl HybridEGARCHLSTM {
         let norm_volume = (volume / 10.0).clamp(-10.0, 10.0);
         let norm_volatility = (self.egarch.get_volatility() / 0.1).clamp(-10.0, 10.0);
         let norm_log_vol = (self.egarch.get_log_volatility() / 5.0).clamp(-10.0, 10.0);
-        
+
         vec![
             norm_price,
             norm_volume,
@@ -2031,7 +2416,14 @@ impl HybridEGARCHLSTM {
             ((volume / price.max(1.0)) / 0.001).clamp(-10.0, 10.0),
             ((self.egarch.get_volatility() * price) / 1000.0).clamp(-10.0, 10.0),
             // Placeholder normalized features
-            0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8,
+            0.1,
+            0.2,
+            0.3,
+            0.4,
+            0.5,
+            0.6,
+            0.7,
+            0.8,
         ]
     }
 
@@ -2044,14 +2436,16 @@ impl HybridEGARCHLSTM {
         // Simple prediction based on EGARCH volatility and recent trend
         // Filter out NaN values and use valid features only
         let current_volatility = self.egarch.get_volatility();
-        let valid_features: Vec<f64> = self.feature_history.iter()
+        let valid_features: Vec<f64> = self
+            .feature_history
+            .iter()
             .rev()
             .take(5)
             .flatten()
             .cloned()
             .filter(|&x| !x.is_nan())
             .collect();
-        
+
         if valid_features.is_empty() {
             return Some(0.0); // Default neutral signal
         }
@@ -2059,10 +2453,14 @@ impl HybridEGARCHLSTM {
         // Simple linear combination of recent features and volatility
         let trend_signal = valid_features.iter().sum::<f64>() / valid_features.len() as f64;
         let prediction = trend_signal * 0.7 + (1.0 - current_volatility / 0.05) * 0.3;
-        
+
         // Ensure prediction is in valid range and not NaN
-        let clamped_prediction = if prediction.is_nan() { 0.0 } else { prediction.clamp(-1.0, 1.0) };
-        
+        let clamped_prediction = if prediction.is_nan() {
+            0.0
+        } else {
+            prediction.clamp(-1.0, 1.0)
+        };
+
         // Debug: print prediction occasionally
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNT: AtomicU32 = AtomicU32::new(0);
@@ -2070,14 +2468,15 @@ impl HybridEGARCHLSTM {
         if count <= 10 {
             println!("🔮 Hybrid prediction #{}: {:.6}", count, clamped_prediction);
         }
-        
+
         Some(clamped_prediction)
     }
 
     /// Train the hybrid model
     pub fn train(&mut self, historical_prices: &[f64], historical_volumes: &[f64]) {
         // Fit EGARCH on returns
-        let returns: Vec<f64> = historical_prices.windows(2)
+        let returns: Vec<f64> = historical_prices
+            .windows(2)
             .map(|w| (w[1] - w[0]) / w[0])
             .collect();
         self.egarch.fit(&returns);
@@ -2097,11 +2496,18 @@ impl HybridEGARCHLSTM {
                 norm_price,
                 norm_volume,
                 0.2, // Normalized placeholder volatility (0.02 / 0.1)
-                0.0,  // Normalized placeholder log volatility (0.0 / 5.0)
+                0.0, // Normalized placeholder log volatility (0.0 / 5.0)
                 ((price * volume) / 100000.0).clamp(-10.0, 10.0),
                 ((volume / price.max(1.0)) / 0.001).clamp(-10.0, 10.0),
                 ((0.02 * price) / 1000.0).clamp(-10.0, 10.0),
-                0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                0.5,
+                0.6,
+                0.7,
+                0.8,
             ];
             features.push(feature_vec);
 
@@ -2119,23 +2525,31 @@ impl HybridEGARCHLSTM {
             let batch_size = 10;
             let epochs = 100; // Increased epochs
             let learning_rate = 0.01; // Increased learning rate
-            
+
             for epoch in 0..epochs {
                 let mut epoch_loss = 0.0;
                 let mut batch_count = 0;
-                
-                for batch_start in (0..features.len().saturating_sub(batch_size)).step_by(batch_size) {
+
+                for batch_start in
+                    (0..features.len().saturating_sub(batch_size)).step_by(batch_size)
+                {
                     let batch_end = (batch_start + batch_size).min(features.len());
                     let batch_features = &features[batch_start..batch_end];
                     let batch_targets = &targets[batch_start..batch_end];
 
-                    let loss = self.lstm.train(batch_features, batch_targets, learning_rate, 5); // More training steps per batch
+                    let loss = self
+                        .lstm
+                        .train(batch_features, batch_targets, learning_rate, 5); // More training steps per batch
                     epoch_loss += loss;
                     batch_count += 1;
                 }
-                
+
                 if epoch % 20 == 0 {
-                    println!("Epoch {}: avg loss = {:.6}", epoch, epoch_loss / batch_count as f64);
+                    println!(
+                        "Epoch {}: avg loss = {:.6}",
+                        epoch,
+                        epoch_loss / batch_count as f64
+                    );
                 }
             }
 
@@ -2193,7 +2607,8 @@ impl VaRRiskManager {
 
         let returns: Vec<f64> = self.returns_history.iter().cloned().collect();
         let mean = returns.iter().sum::<f64>() / returns.len() as f64;
-        let variance = returns.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (returns.len() - 1) as f64;
+        let variance =
+            returns.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (returns.len() - 1) as f64;
         let std = variance.sqrt();
 
         if use_heavy_tail {
@@ -2240,25 +2655,37 @@ impl VaRRiskManager {
 impl SimpleMLPredictor {
     /// Get VaR-based position size recommendation
     pub fn get_var_position_size(&self, portfolio_value: f64, max_loss_percent: f64) -> f64 {
-        self.var_risk_manager.get_position_size(portfolio_value, max_loss_percent)
+        self.var_risk_manager
+            .get_position_size(portfolio_value, max_loss_percent)
     }
 
     /// Check if position should be closed based on VaR risk limits
     pub fn should_close_based_on_var(&self, current_pnl: f64, position_value: f64) -> bool {
-        self.var_risk_manager.should_close_position(current_pnl, position_value)
+        self.var_risk_manager
+            .should_close_position(current_pnl, position_value)
     }
 
     /// Get current VaR estimates at different confidence levels
     pub fn get_var_estimates(&self) -> Vec<(f64, Option<f64>)> {
-        self.var_risk_manager.confidence_levels.iter()
+        self.var_risk_manager
+            .confidence_levels
+            .iter()
             .map(|&conf| (conf, self.var_risk_manager.calculate_var(conf)))
             .collect()
     }
 
     /// Get parametric VaR estimates using heavy-tailed distributions
     pub fn get_parametric_var_estimates(&self, use_heavy_tail: bool) -> Vec<(f64, Option<f64>)> {
-        self.var_risk_manager.confidence_levels.iter()
-            .map(|&conf| (conf, self.var_risk_manager.calculate_parametric_var(conf, use_heavy_tail)))
+        self.var_risk_manager
+            .confidence_levels
+            .iter()
+            .map(|&conf| {
+                (
+                    conf,
+                    self.var_risk_manager
+                        .calculate_parametric_var(conf, use_heavy_tail),
+                )
+            })
             .collect()
     }
 
@@ -2298,9 +2725,8 @@ impl SimpleMLPredictor {
 
         // Calculate standard deviation of predictions
         let mean: f64 = predictions.iter().sum::<f64>() / predictions.len() as f64;
-        let variance: f64 = predictions.iter()
-            .map(|p| (p - mean).powi(2))
-            .sum::<f64>() / (predictions.len() - 1) as f64;
+        let variance: f64 = predictions.iter().map(|p| (p - mean).powi(2)).sum::<f64>()
+            / (predictions.len() - 1) as f64;
 
         Some(variance.sqrt().max(0.01)) // Minimum volatility of 1%
     }
@@ -2318,9 +2744,7 @@ impl SimpleMLPredictor {
             return None; // Not enough data
         }
 
-        let sum: f64 = self.trades.range(start..=index)
-            .map(|t| t.price)
-            .sum();
+        let sum: f64 = self.trades.range(start..=index).map(|t| t.price).sum();
 
         Some(sum / count as f64)
     }
@@ -2339,16 +2763,12 @@ impl SimpleMLPredictor {
         }
 
         // Calculate volume slope using linear regression
-        let volumes: Vec<f64> = self.trades.range(start..=index)
-            .map(|t| t.volume)
-            .collect();
+        let volumes: Vec<f64> = self.trades.range(start..=index).map(|t| t.volume).collect();
 
         let n = volumes.len() as f64;
         let sum_x: f64 = (0..volumes.len()).map(|i| i as f64).sum();
         let sum_y: f64 = volumes.iter().sum();
-        let sum_xy: f64 = volumes.iter().enumerate()
-            .map(|(i, &v)| i as f64 * v)
-            .sum();
+        let sum_xy: f64 = volumes.iter().enumerate().map(|(i, &v)| i as f64 * v).sum();
         let sum_x2: f64 = (0..volumes.len()).map(|i| (i as f64).powi(2)).sum();
 
         let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x.powi(2));
@@ -2415,7 +2835,9 @@ impl SimpleMLPredictor {
             if let [current, next] = window {
                 // Simple accuracy: did we predict the direction correctly?
                 let actual_direction = (next.price - current.price).signum();
-                let predicted_direction = (self.predict_at_index(self.trades.len() - 1).unwrap_or(0.0) - current.price).signum();
+                let predicted_direction =
+                    (self.predict_at_index(self.trades.len() - 1).unwrap_or(0.0) - current.price)
+                        .signum();
 
                 if actual_direction == predicted_direction {
                     correct_predictions += 1;
@@ -2442,21 +2864,36 @@ impl SimpleMLPredictor {
         // Moving average score
         if let (Some(sma5), Some(sma10)) = (self.calculate_sma(5), self.calculate_sma(10)) {
             let current_price = self.trades.back()?.price;
-            let ma_score = if current_price > sma5 && sma5 > sma10 { 1.0 }
-                          else if current_price < sma5 && sma5 < sma10 { -1.0 }
-                          else { 0.0 };
+            let ma_score = if current_price > sma5 && sma5 > sma10 {
+                1.0
+            } else if current_price < sma5 && sma5 < sma10 {
+                -1.0
+            } else {
+                0.0
+            };
             scores.push(ma_score);
         }
 
         // Technical indicators score (RSI + MACD)
-        if let (Some(rsi), Some(macd)) = (self.calculate_rsi_from_index(self.trades.len() - 1, 14), self.calculate_macd_from_index(self.trades.len() - 1)) {
-            let rsi_score = if rsi > 70.0 { -1.0 } else if rsi < 30.0 { 1.0 } else { 0.0 };
+        if let (Some(rsi), Some(macd)) = (
+            self.calculate_rsi_from_index(self.trades.len() - 1, 14),
+            self.calculate_macd_from_index(self.trades.len() - 1),
+        ) {
+            let rsi_score = if rsi > 70.0 {
+                -1.0
+            } else if rsi < 30.0 {
+                1.0
+            } else {
+                0.0
+            };
             let macd_score = macd.signum();
             scores.push(rsi_score * 0.5 + macd_score * 0.5);
         }
 
         // Volume trend score
-        if let Some(volume_trend) = self.calculate_volume_trend_from_index(self.trades.len() - 1, 10) {
+        if let Some(volume_trend) =
+            self.calculate_volume_trend_from_index(self.trades.len() - 1, 10)
+        {
             scores.push(volume_trend.signum() * volume_trend.abs().min(1.0));
         }
 
@@ -2486,7 +2923,7 @@ impl Default for BayesianDecisionMaker {
 impl BayesianDecisionMaker {
     pub fn new() -> Self {
         Self {
-            risk_tolerance: 2.0, // Moderate risk tolerance
+            risk_tolerance: 2.0,     // Moderate risk tolerance
             return_threshold: 0.001, // 0.1% minimum expected return
         }
     }
@@ -2583,20 +3020,36 @@ impl BayesianEnsemblePredictor {
     }
 
     /// Train the ensemble with multiple models
-    pub fn train(&mut self, prices: &[f64], volumes: &[f64], features: &[Vec<f64>], targets: &[f64]) {
+    pub fn train(
+        &mut self,
+        prices: &[f64],
+        volumes: &[f64],
+        features: &[Vec<f64>],
+        targets: &[f64],
+    ) {
         // Train individual models
         self.train_individual_models(prices, volumes, features, targets);
 
         // Initialize performance tracking
         for model_name in self.models.keys() {
-            self.performance_history.insert(model_name.clone(), Vec::new());
+            self.performance_history
+                .insert(model_name.clone(), Vec::new());
         }
     }
 
     /// Train individual models for the ensemble
-    fn train_individual_models(&mut self, prices: &[f64], _volumes: &[f64], features: &[Vec<f64>], targets: &[f64]) {
+    fn train_individual_models(
+        &mut self,
+        prices: &[f64],
+        _volumes: &[f64],
+        features: &[Vec<f64>],
+        targets: &[f64],
+    ) {
         // Train GAS-GLD model
-        let mut gas_gld = GASModel::new(GASDistribution::GLD(GeneralizedLambda::new(0.0, 1.0, 1.0, 1.0)), 1000);
+        let mut gas_gld = GASModel::new(
+            GASDistribution::GLD(GeneralizedLambda::new(0.0, 1.0, 1.0, 1.0)),
+            1000,
+        );
         if let Some(returns) = Self::calculate_returns(prices) {
             for &ret in &returns {
                 gas_gld.update(ret);
@@ -2605,7 +3058,12 @@ impl BayesianEnsemblePredictor {
         }
 
         // Train Random Forest model
-        if let Ok(x) = DenseMatrix::from_2d_array(&features.iter().map(|row| row.as_slice()).collect::<Vec<_>>()) {
+        if let Ok(x) = DenseMatrix::from_2d_array(
+            &features
+                .iter()
+                .map(|row| row.as_slice())
+                .collect::<Vec<_>>(),
+        ) {
             let y = targets.to_vec();
             if let Ok(rf_model) = RandomForestRegressor::fit(&x, &y,
                 smartcore::ensemble::random_forest_regressor::RandomForestRegressorParameters::default()
@@ -2615,9 +3073,17 @@ impl BayesianEnsemblePredictor {
         }
 
         // Train Linear Regression model
-        if let Ok(x) = Array2::from_shape_vec((features.len(), features[0].len()), features.iter().flatten().cloned().collect()) {
-            if let Ok(lr_model) = linfa_linear::LinearRegression::default().fit(&Dataset::new(x, Array1::from_vec(targets.to_vec()))) {
-                self.models.insert("linear_regression".to_string(), Box::new(LinearRegressionWrapper::new(lr_model)));
+        if let Ok(x) = Array2::from_shape_vec(
+            (features.len(), features[0].len()),
+            features.iter().flatten().cloned().collect(),
+        ) {
+            if let Ok(lr_model) = linfa_linear::LinearRegression::default()
+                .fit(&Dataset::new(x, Array1::from_vec(targets.to_vec())))
+            {
+                self.models.insert(
+                    "linear_regression".to_string(),
+                    Box::new(LinearRegressionWrapper::new(lr_model)),
+                );
             }
         }
     }
@@ -2633,7 +3099,9 @@ impl BayesianEnsemblePredictor {
                 predictions.push((model_name.clone(), pred));
 
                 // Get recent performance for this model
-                let perf = self.performance_history.get(model_name)
+                let perf = self
+                    .performance_history
+                    .get(model_name)
                     .and_then(|history| history.last())
                     .cloned()
                     .unwrap_or_else(|| ModelPerformance::new(1, 1, 0.0)); // Default neutral performance
@@ -2646,14 +3114,22 @@ impl BayesianEnsemblePredictor {
         }
 
         // Calculate BMA weights
-        let bma_weights = self.bayesian_analyzer.bma_weights(&performances.iter().map(|(name, perf)| (*name, perf)).collect::<Vec<_>>());
+        let bma_weights = self.bayesian_analyzer.bma_weights(
+            &performances
+                .iter()
+                .map(|(name, perf)| (*name, perf))
+                .collect::<Vec<_>>(),
+        );
 
         // Weighted ensemble prediction
         let mut weighted_sum = 0.0;
         let mut total_weight = 0.0;
 
         for (model_name, prediction) in &predictions {
-            let weight = bma_weights.get(model_name).cloned().unwrap_or(1.0 / predictions.len() as f64);
+            let weight = bma_weights
+                .get(model_name)
+                .cloned()
+                .unwrap_or(1.0 / predictions.len() as f64);
             weighted_sum += prediction * weight;
             total_weight += weight;
         }
@@ -2676,7 +3152,9 @@ impl BayesianEnsemblePredictor {
                 predictions.push((model_name.clone(), pred));
 
                 // Get recent performance for this model (immutable access)
-                let perf = self.performance_history.get(model_name)
+                let perf = self
+                    .performance_history
+                    .get(model_name)
                     .and_then(|history| history.last())
                     .cloned()
                     .unwrap_or_else(|| ModelPerformance::new(1, 1, 0.0)); // Default neutral performance
@@ -2689,19 +3167,33 @@ impl BayesianEnsemblePredictor {
         }
 
         // Calculate BMA weights
-        let bma_weights = self.bayesian_analyzer.bma_weights(&performances.iter().map(|(name, perf)| (*name, perf)).collect::<Vec<_>>());
+        let bma_weights = self.bayesian_analyzer.bma_weights(
+            &performances
+                .iter()
+                .map(|(name, perf)| (*name, perf))
+                .collect::<Vec<_>>(),
+        );
 
         // Debug: Log individual model predictions and weights
         println!("🎯 Individual model predictions:");
         for (model_name, prediction) in &predictions {
-            let weight = bma_weights.get(model_name).cloned().unwrap_or(1.0 / predictions.len() as f64);
-            println!("  {}: {:.4} (weight: {:.4})", model_name, prediction, weight);
+            let weight = bma_weights
+                .get(model_name)
+                .cloned()
+                .unwrap_or(1.0 / predictions.len() as f64);
+            println!(
+                "  {}: {:.4} (weight: {:.4})",
+                model_name, prediction, weight
+            );
         }
 
         // Debug: Log performance data
         println!("🎯 Model performances:");
         for (model_name, perf) in &performances {
-            println!("  {}: wins={}/{}, pnl=${:.2}", model_name, perf.wins, perf.total_trades, perf.total_pnl);
+            println!(
+                "  {}: wins={}/{}, pnl=${:.2}",
+                model_name, perf.wins, perf.total_trades, perf.total_pnl
+            );
         }
 
         // Weighted ensemble prediction
@@ -2709,7 +3201,10 @@ impl BayesianEnsemblePredictor {
         let mut total_weight = 0.0;
 
         for (model_name, prediction) in &predictions {
-            let weight = bma_weights.get(model_name).cloned().unwrap_or(1.0 / predictions.len() as f64);
+            let weight = bma_weights
+                .get(model_name)
+                .cloned()
+                .unwrap_or(1.0 / predictions.len() as f64);
             weighted_sum += prediction * weight;
             total_weight += weight;
         }
@@ -2737,7 +3232,9 @@ impl BayesianEnsemblePredictor {
         // we'll use a different approach: track prediction accuracy over time
 
         // Get existing performance history for this model
-        let history = self.performance_history.entry(model_name.to_string())
+        let history = self
+            .performance_history
+            .entry(model_name.to_string())
             .or_default();
 
         // Calculate cumulative performance from all previous trades
@@ -2763,7 +3260,8 @@ impl BayesianEnsemblePredictor {
         *history = vec![cumulative_perf.clone()];
 
         // Update Bayesian priors with cumulative performance
-        self.bayesian_analyzer.update_priors(model_name, &cumulative_perf);
+        self.bayesian_analyzer
+            .update_priors(model_name, &cumulative_perf);
     }
 
     /// Calculate returns from prices
@@ -2772,9 +3270,12 @@ impl BayesianEnsemblePredictor {
             return None;
         }
 
-        Some(prices.windows(2)
-            .map(|window| (window[1] - window[0]) / window[0])
-            .collect())
+        Some(
+            prices
+                .windows(2)
+                .map(|window| (window[1] - window[0]) / window[0])
+                .collect(),
+        )
     }
 }
 

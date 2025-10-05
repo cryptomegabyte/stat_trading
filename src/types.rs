@@ -5,6 +5,7 @@ pub enum TradingPair {
     XRP,
     SOL,
     BNB,
+    LTC,
 }
 
 impl TradingPair {
@@ -15,6 +16,7 @@ impl TradingPair {
             TradingPair::XRP => "xrp",
             TradingPair::SOL => "sol",
             TradingPair::BNB => "bnb",
+            TradingPair::LTC => "ltc",
         }
     }
 
@@ -29,6 +31,7 @@ impl TradingPair {
             TradingPair::XRP => "XXRPZUSD",
             TradingPair::SOL => "SOLUSD",
             TradingPair::BNB => "BNBUSD",
+            TradingPair::LTC => "XLTCZUSD",
         }
     }
 
@@ -39,6 +42,7 @@ impl TradingPair {
             TradingPair::XRP => "XRPUSD",
             TradingPair::SOL => "SOLUSD",
             TradingPair::BNB => "BNBUSD",
+            TradingPair::LTC => "LTCUSD",
         }
     }
 }
@@ -55,18 +59,18 @@ pub struct TradingConfig {
 
 impl Default for TradingConfig {
     fn default() -> Self {
-        // Focus on top performing pair: BNB for spot trading
-        let pairs = vec![TradingPair::BNB];
+           // Focus on top performing pairs: BTC, SOL, XRP, LTC for live trading
+           let pairs = vec![TradingPair::BTC, TradingPair::SOL, TradingPair::XRP, TradingPair::LTC];
         let total_balance = 2000.0;
         let initial_balance = total_balance / pairs.len() as f64;
 
         Self {
             pairs,
             initial_balance,
-            stop_loss_pct: 100.0,  // EXTREME: No stop-loss to give trades unlimited room
-            take_profit_pct: 5.0,  // EXTREME: 500% take profit for massive gains
-            max_position_size_pct: 0.5,  // EXTREME: 50% max position size for aggressive capital utilization
-            leverage: 1.0,  // SPOT TRADING: No leverage (1.0 = no amplification)
+            stop_loss_pct: 1.5,         // Conservative: 1.5% stop-loss
+            take_profit_pct: 4.0,       // Conservative: 4% take profit
+            max_position_size_pct: 0.1, // Conservative: 10% max position size
+            leverage: 1.0,              // SPOT TRADING: No leverage (1.0 = no amplification)
         }
     }
 }
@@ -80,7 +84,14 @@ pub struct TradeData {
 #[derive(Debug)]
 pub enum MLModel {
     LinearRegression(linfa_linear::FittedLinearRegression<f64>),
-    RandomForest(smartcore::ensemble::random_forest_regressor::RandomForestRegressor<f64, f64, smartcore::linalg::basic::matrix::DenseMatrix<f64>, Vec<f64>>),
+    RandomForest(
+        smartcore::ensemble::random_forest_regressor::RandomForestRegressor<
+            f64,
+            f64,
+            smartcore::linalg::basic::matrix::DenseMatrix<f64>,
+            Vec<f64>,
+        >,
+    ),
     HybridEGARCHLSTM(Box<crate::ml::HybridEGARCHLSTM>),
     GAS(Box<crate::ml::GASModel>),
     HybridGASRF(Box<crate::ml::HybridGASRF>),

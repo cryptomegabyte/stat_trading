@@ -1,4 +1,4 @@
-pub mod types;
+pub mod bayesian;
 pub mod ml;
 pub mod trading;
-pub mod bayesian;
+pub mod types;
