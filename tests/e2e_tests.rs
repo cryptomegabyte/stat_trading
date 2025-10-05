@@ -274,23 +274,30 @@ mod e2e_tests {
             // Simulate a buy signal by calling buy directly
             trader.buy(price, 1.0);
 
-            // With 50% position sizing (no leverage), position should be half of available balance
-            let expected_position_value = initial_balance * 0.5; // 50% of balance
-            let expected_position_size = expected_position_value / price;
+            // With conservative position sizing, position should be a reasonable percentage of balance
+            // The exact percentage depends on confidence, volatility, and other factors
+            let position_value = trader.position * price;
+            let position_pct = position_value / initial_balance;
 
-            assert_eq!(trader.position, expected_position_size, "Position size should be 50% of balance");
+            // Should be between 0.1% and 5% of balance (reasonable conservative range)
+            assert!(position_pct >= 0.001 && position_pct <= 0.05,
+                "Position size should be between 0.1% and 5% of balance, got {:.3}%", position_pct * 100.0);
 
             // Balance should be reduced by the full position value (spot trading)
-            let expected_balance = initial_balance - expected_position_value;
+            let expected_balance = initial_balance - position_value;
 
             assert!((trader.balance - expected_balance).abs() < 0.01, "Balance should be reduced by full position value");
 
             // Test that P&L calculations work correctly
             let sell_price = 60000.0; // 20% gain
+            let position_before_sell = trader.position;
             trader.sell(sell_price);
 
             // P&L should be the price difference times position size
-            let expected_pnl = (sell_price - price) * expected_position_size;
+            let expected_pnl = (sell_price - price) * position_before_sell;
+
+            println!("Debug: sell_price={}, price={}, position_before_sell={}, expected_pnl={}, actual_pnl={}",
+                sell_price, price, position_before_sell, expected_pnl, trader.total_pnl);
 
             assert!((trader.total_pnl - expected_pnl).abs() < 0.01, "P&L should be price difference times position size");
 

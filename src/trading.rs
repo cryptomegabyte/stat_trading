@@ -255,20 +255,79 @@ impl PositionSizer {
 
     pub fn with_leverage(leverage: f64) -> Self {
         Self {
-                base_risk_pct: 0.5,  // EXTREME: 50% base risk for aggressive spot trading
-            max_risk_pct: 0.5,  // Very high: 50% max risk
+            base_risk_pct: 0.02,  // Conservative: 2% base risk per trade
+            max_risk_pct: 0.05,   // Maximum 5% risk per trade
             volatility_window: 20,
             recent_trades: VecDeque::with_capacity(20),
             performance_window: 20,
-            kelly_fraction: 1.0, // Full Kelly criterion for maximum aggression
+            kelly_fraction: 0.5, // Half Kelly criterion for balanced risk
             leverage,
         }
     }
 
-    pub fn calculate_position_size(&self, _balance: f64, _price: f64, _volatility: f64, _confidence: f64) -> f64 {
-        // For spot trading: return the base risk percentage (no leverage)
-        // This gives the actual percentage of balance to risk per trade
-        self.base_risk_pct
+    /// Calculate position size based on confidence, volatility, and recent performance
+    pub fn calculate_position_size(&self, _balance: f64, _price: f64, volatility: f64, confidence: f64) -> f64 {
+        // Base risk percentage (conservative)
+        let mut risk_pct = self.base_risk_pct;
+
+        // Adjust for confidence: higher confidence = larger position
+        let confidence_multiplier = confidence.clamp(0.1, 1.0);
+        risk_pct *= confidence_multiplier;
+
+        // Adjust for volatility: higher volatility = smaller position
+        let volatility_adjustment = if volatility > 0.05 {
+            // High volatility: reduce position size
+            (0.05 / volatility).min(1.0)
+        } else if volatility < 0.01 {
+            // Low volatility: can increase position slightly
+            1.2
+        } else {
+            1.0
+        };
+        risk_pct *= volatility_adjustment;
+
+        // Adjust based on recent performance using Kelly criterion
+        let kelly_adjustment = self.calculate_kelly_adjustment();
+        risk_pct *= kelly_adjustment;
+
+        // Apply leverage
+        risk_pct *= self.leverage;
+
+        // Ensure within bounds
+        risk_pct.clamp(0.005, self.max_risk_pct) // Min 0.5%, max as configured
+    }
+
+    /// Calculate Kelly criterion adjustment based on recent performance
+    fn calculate_kelly_adjustment(&self) -> f64 {
+        if self.recent_trades.is_empty() {
+            return 1.0; // No adjustment if no history
+        }
+
+        let wins = self.recent_trades.iter().filter(|&&x| x).count() as f64;
+        let total = self.recent_trades.len() as f64;
+        let win_rate = wins / total;
+
+        if win_rate <= 0.0 || win_rate >= 1.0 {
+            return 0.5; // Conservative fallback
+        }
+
+        // Estimate win/loss ratio from recent trades
+        // This is a simplified approach - in practice you'd track actual win/loss amounts
+        let avg_win_loss_ratio = 1.5; // Assume average win is 1.5x average loss
+
+        // Kelly formula: f = (bp - q) / b
+        // where b = odds received, p = probability of winning, q = probability of losing
+        let b = avg_win_loss_ratio;
+        let p = win_rate;
+        let q = 1.0 - p;
+
+        let kelly_f = (b * p - q) / b;
+
+        // Apply Kelly fraction (typically 0.5 for half-Kelly)
+        let adjusted_kelly = kelly_f * self.kelly_fraction;
+
+        // Ensure reasonable bounds
+        adjusted_kelly.clamp(0.1, 2.0)
     }
 
     pub fn record_trade_result(&mut self, was_win: bool) {
@@ -283,13 +342,56 @@ impl PositionSizer {
     }
 
     pub fn get_signal_confidence(&self, predictor: &SimpleMLPredictor) -> f64 {
-        // Simple confidence based on how far prediction is from current price
-        if let (Some(current), Some(predicted)) = (predictor.trades.back(), predictor.predict_next()) {
-            let diff_pct = ((predicted - current.price) / current.price).abs();
-            // Higher confidence for larger predicted moves
-            (diff_pct * 10.0).clamp(0.1, 1.0)
-        } else {
+        // Multi-factor confidence calculation
+        let mut confidence_factors = Vec::new();
+
+        // Factor 1: Prediction magnitude (larger moves = higher confidence)
+        if let Some(prediction) = predictor.predict_next() {
+            if let Some(current_price) = predictor.trades.back().map(|t| t.price) {
+                let move_pct = ((prediction - current_price) / current_price).abs();
+                let magnitude_confidence = (move_pct * 5.0).clamp(0.0, 1.0); // Scale and clamp
+                confidence_factors.push(magnitude_confidence);
+            }
+        }
+
+        // Factor 2: Model agreement (ensemble consensus)
+        if let Some(ensemble_prediction) = predictor.predict_ensemble() {
+            // Check how close individual models are to ensemble prediction
+            let individual_predictions = predictor.predict_individual_models();
+            if !individual_predictions.is_empty() {
+                let avg_deviation: f64 = individual_predictions.iter()
+                    .map(|(_, pred)| ((pred - ensemble_prediction).abs() / ensemble_prediction.abs()).min(1.0))
+                    .sum::<f64>() / individual_predictions.len() as f64;
+
+                // Lower deviation = higher confidence
+                let agreement_confidence = (1.0 - avg_deviation).clamp(0.0, 1.0);
+                confidence_factors.push(agreement_confidence);
+            }
+        }
+
+        // Factor 3: Recent prediction accuracy
+        let recent_accuracy = predictor.get_recent_accuracy(10); // Last 10 predictions
+        confidence_factors.push(recent_accuracy);
+
+        // Factor 4: Trend confirmation strength
+        if let Some(trend_score) = predictor.get_trend_confirmation_score() {
+            // Normalize trend score to 0-1 confidence
+            let trend_confidence = ((trend_score + 1.0) / 2.0).clamp(0.0, 1.0);
+            confidence_factors.push(trend_confidence);
+        }
+
+        // Combine factors with weighted average
+        if confidence_factors.is_empty() {
             0.5 // Default confidence
+        } else {
+            let weights = [0.3, 0.3, 0.2, 0.2]; // Weights for the 4 factors
+            let weighted_sum: f64 = confidence_factors.iter()
+                .zip(weights.iter())
+                .map(|(factor, weight)| factor * weight)
+                .sum();
+
+            let total_weight: f64 = weights.iter().take(confidence_factors.len()).sum();
+            (weighted_sum / total_weight).clamp(0.1, 1.0)
         }
     }
 }
@@ -386,7 +488,7 @@ impl PairTrader {
         let confidence = self.position_sizer.get_signal_confidence(&self.predictor);
 
         // Use VaR-based position sizing for better risk management
-        let var_position_size = self.predictor.get_var_position_size(self.balance, 0.02); // 2% max loss
+        let var_position_size = self.predictor.var_risk_manager.get_position_size(self.balance, 0.02); // 2% max loss
         let traditional_risk_pct = self.position_sizer.calculate_position_size(self.balance, price, volatility, confidence);
 
         // Use the more conservative of the two approaches

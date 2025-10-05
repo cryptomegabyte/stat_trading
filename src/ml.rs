@@ -2361,6 +2361,111 @@ impl SimpleMLPredictor {
             Some(0.0)
         }
     }
+
+    /// Get ensemble prediction (weighted average of all models)
+    pub fn predict_ensemble(&self) -> Option<f64> {
+        if let Some(MLModel::Ensemble(ref ensemble)) = self.model {
+            Some(ensemble.predict_immutable(0.0, &[])) // Price and features not used in ensemble prediction
+        } else {
+            None
+        }
+    }
+
+    /// Get predictions from individual models for confidence calculation
+    pub fn predict_individual_models(&self) -> Vec<(String, f64)> {
+        if let Some(MLModel::Ensemble(ref ensemble)) = self.model {
+            let mut predictions = Vec::new();
+            let current_price = self.trades.back().map(|t| t.price).unwrap_or(0.0);
+
+            // Get predictions from each model
+            if let Some(linear_pred) = ensemble.models.get("linear_regression") {
+                if let Some(pred) = linear_pred.predict(current_price, &[]) {
+                    predictions.push(("linear_regression".to_string(), pred));
+                }
+            }
+
+            if let Some(rf_pred) = ensemble.models.get("random_forest") {
+                if let Some(pred) = rf_pred.predict(current_price, &[]) {
+                    predictions.push(("random_forest".to_string(), pred));
+                }
+            }
+
+            if let Some(gas_pred) = ensemble.models.get("gas_gld") {
+                if let Some(pred) = gas_pred.predict(current_price, &[]) {
+                    predictions.push(("gas_gld".to_string(), pred));
+                }
+            }
+
+            predictions
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Calculate recent prediction accuracy over last N predictions
+    pub fn get_recent_accuracy(&self, n: usize) -> f64 {
+        if self.trades.len() < n + 1 {
+            return 0.5; // Default accuracy if insufficient data
+        }
+
+        let mut correct_predictions = 0;
+        let trades: Vec<_> = self.trades.iter().rev().take(n + 1).collect();
+
+        for window in trades.windows(2) {
+            if let [current, next] = window {
+                // Simple accuracy: did we predict the direction correctly?
+                let actual_direction = (next.price - current.price).signum();
+                let predicted_direction = (self.predict_at_index(self.trades.len() - 1).unwrap_or(0.0) - current.price).signum();
+
+                if actual_direction == predicted_direction {
+                    correct_predictions += 1;
+                }
+            }
+        }
+
+        correct_predictions as f64 / n as f64
+    }
+
+    /// Get trend confirmation score based on multiple indicators
+    pub fn get_trend_confirmation_score(&self) -> Option<f64> {
+        if self.trades.len() < 20 {
+            return None;
+        }
+
+        let mut scores = Vec::new();
+
+        // Momentum score
+        if let Some(momentum) = self.calculate_momentum(10) {
+            scores.push(momentum.signum() * momentum.abs().min(1.0));
+        }
+
+        // Moving average score
+        if let (Some(sma5), Some(sma10)) = (self.calculate_sma(5), self.calculate_sma(10)) {
+            let current_price = self.trades.back()?.price;
+            let ma_score = if current_price > sma5 && sma5 > sma10 { 1.0 }
+                          else if current_price < sma5 && sma5 < sma10 { -1.0 }
+                          else { 0.0 };
+            scores.push(ma_score);
+        }
+
+        // Technical indicators score (RSI + MACD)
+        if let (Some(rsi), Some(macd)) = (self.calculate_rsi_from_index(self.trades.len() - 1, 14), self.calculate_macd_from_index(self.trades.len() - 1)) {
+            let rsi_score = if rsi > 70.0 { -1.0 } else if rsi < 30.0 { 1.0 } else { 0.0 };
+            let macd_score = macd.signum();
+            scores.push(rsi_score * 0.5 + macd_score * 0.5);
+        }
+
+        // Volume trend score
+        if let Some(volume_trend) = self.calculate_volume_trend_from_index(self.trades.len() - 1, 10) {
+            scores.push(volume_trend.signum() * volume_trend.abs().min(1.0));
+        }
+
+        if scores.is_empty() {
+            None
+        } else {
+            Some(scores.iter().sum::<f64>() / scores.len() as f64)
+        }
+    }
 }
 
 /// Bayesian Decision Maker for optimal trading decisions
