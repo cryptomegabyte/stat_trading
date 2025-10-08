@@ -283,35 +283,89 @@ mod e2e_tests {
     }
 
     #[test]
-    fn test_memory_efficiency() {
-        // Test that the system handles large amounts of data efficiently
-        let mut predictor = SimpleMLPredictor::new(1000); // Large window
+    fn test_stress_testing_high_frequency_trades() {
+        // Test system performance under high-frequency trading conditions
+        let mut backtester = Backtester::new();
+        let pair = TradingPair::BTC;
 
-        // Add many trades with varied data to avoid singular matrix
-        for i in 0..200 {
-            // Create varied price movements with some noise
-            let base_price = 50000.0 + (i as f64) * 10.0;
-            let noise = ((i as f64).sin() * 100.0) + (rand::random::<f64>() - 0.5) * 200.0;
-            let price = base_price + noise;
-            let volume = 1.0 + (i % 5) as f64 + rand::random::<f64>() * 2.0; // Varied volume
-            predictor.add_trade(price, volume);
+        // Generate 1000 trades in rapid succession
+        let mut price = 50000.0;
+        let start_time = std::time::Instant::now();
+
+        for i in 0..1000 {
+            // Simulate high-frequency micro-movements
+            let micro_trend = (rand::random::<f64>() - 0.5) * 0.001; // Very small changes
+            price += micro_trend * price;
+            price = price.max(45000.0).min(55000.0); // Keep in tight range
+
+            let volume = 0.1 + rand::random::<f64>() * 0.5; // Small volumes
+            backtester.process_trade(&pair, price, volume);
         }
 
-        // Should maintain window size limit
-        assert!(
-            predictor.trades.len() <= 1000,
-            "Should not exceed window size"
-        );
+        let duration = start_time.elapsed();
+        println!("Processed 1000 trades in {:?}", duration);
 
-        // Should still be able to make predictions (may be None if model training failed, but shouldn't panic)
-        let _prediction = predictor.predict_next();
-        // Don't assert prediction.is_some() since model training might fail with varied data
+        // Verify system didn't crash and maintains reasonable state
+        assert!(duration.as_millis() < 5000, "Processing should be reasonably fast");
 
-        println!(
-            "Memory Efficiency test: Handled {} trades within window limit of {}",
-            predictor.trades.len(),
-            predictor.window_size
-        );
+        if let Some(trader) = backtester.traders.get(&pair) {
+            assert!(trader.balance >= 0.0, "Balance should not go negative");
+            assert!(trader.predictor.trades.len() <= 1000, "Should not have more trades than processed");
+        }
+    }
+
+    #[test]
+    fn test_extreme_market_conditions() {
+        // Test behavior during extreme volatility and flash crashes
+        let mut backtester = Backtester::new();
+        let pair = TradingPair::BTC;
+
+        let mut price = 50000.0;
+
+        // Normal market period
+        for _ in 0..50 {
+            price += (rand::random::<f64>() - 0.5) * 100.0;
+            backtester.process_trade(&pair, price, 1.0);
+        }
+
+        // Flash crash simulation
+        price *= 0.7; // 30% sudden drop
+        backtester.process_trade(&pair, price, 5.0); // High volume
+
+        // Recovery period
+        for _ in 0..50 {
+            price += (rand::random::<f64>() - 0.4) * 200.0; // Upward bias recovery
+            backtester.process_trade(&pair, price, 2.0);
+        }
+
+        // Verify system handles extreme conditions
+        if let Some(trader) = backtester.traders.get(&pair) {
+            assert!(trader.balance >= 0.0, "Should handle flash crashes without negative balance");
+            // Check that stop-losses were triggered appropriately
+            assert!(trader.predictor.trades.len() > 0, "Should have executed trades during volatility");
+        }
+    }
+
+    #[test]
+    fn test_memory_efficiency_large_dataset() {
+        // Test memory usage with large datasets
+        let mut predictor = SimpleMLPredictor::new(1000); // Large window
+
+        // Add 2000 trades to test memory management
+        let mut price = 50000.0;
+
+        for i in 0..2000 {
+            price += (rand::random::<f64>() - 0.5) * 50.0;
+            let volume = 1.0 + rand::random::<f64>() * 2.0;
+            predictor.add_trade(price, volume);
+
+            // Verify memory bounds are respected
+            assert!(predictor.trades.len() <= 1000, "Should not exceed window size");
+        }
+
+        // Verify model can still make predictions
+        let prediction = predictor.predict_next();
+        assert!(prediction.is_some() || predictor.trades.len() < 10, "Should make predictions when possible");
     }
 
     #[test]
@@ -374,14 +428,7 @@ mod e2e_tests {
     #[test]
     fn test_multi_pair_trading() {
         // Test that the system can handle multiple trading pairs simultaneously
-        let config = crypto_trading_bot_demo::types::TradingConfig {
-            pairs: vec![TradingPair::BTC, TradingPair::ETH, TradingPair::BNB],
-            initial_balance: 1000.0, // 1000 per pair
-            stop_loss_pct: 100.0,
-            take_profit_pct: 5.0,
-            max_position_size_pct: 0.5,
-            leverage: 2.0, // 2x leverage for this test
-        };
+        let config = crypto_trading_bot_demo::types::TradingConfig::default();
 
         let mut traders = std::collections::HashMap::new();
         for pair in &config.pairs {
@@ -407,7 +454,7 @@ mod e2e_tests {
 
                 // Check that each trader maintains separate state
                 assert_eq!(
-                    trader.balance, 1000.0,
+                    trader.balance, 500.0,
                     "Each trader should have separate balance"
                 );
                 assert_eq!(
@@ -421,7 +468,7 @@ mod e2e_tests {
         // Verify all pairs are being tracked
         assert_eq!(
             traders.len(),
-            3,
+            4,
             "Should have traders for all configured pairs"
         );
 

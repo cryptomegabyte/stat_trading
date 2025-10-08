@@ -8,7 +8,7 @@ use kraken::KrakenStream;
 use std::env;
 use tracing::{info, warn, Level};
 use trading::{Backtester, LiveTrader};
-use types::TradingPair;
+use types::{MultiTimeframeData, TradingPair};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -254,37 +254,48 @@ async fn run_live(max_trades: u64) -> Result<()> {
 }
 
 async fn run_backtest(model_type: String) -> Result<()> {
-    info!("🚀 Starting MULTI-PAIR BACKTEST with model: {}", model_type);
-    info!("📊 Testing multiple crypto pairs: BTC, ETH, XRP, SOL, BNB, ADA, DOT, LINK, LTC, AVAX");
-    info!("📅 1 year of hourly data from Kraken");
+    info!("🚀 Starting SINGLE-TIMEFRAME MULTI-PAIR BACKTEST with model: {}", model_type);
+    info!("📊 Testing multiple crypto pairs with carry income");
+    info!("📅 1 year of data from Kraken");
 
     // Initialize backtester with specified model type
     let mut backtester = Backtester::with_model_type(&model_type);
 
-    // Fetch data for each pair
+    // Fetch single timeframe data for each pair (use 1h for consistency with original)
     let pairs = backtester.config.pairs.clone(); // Clone to avoid borrowing issues
     for pair in &pairs {
         info!(
-            "📡 Fetching {} data from Kraken...",
+            "📡 Fetching 1h {} data from Kraken...",
             pair.symbol().to_uppercase()
         );
 
-        let pair_data = fetch_pair_data(pair).await?;
+        let data = fetch_pair_data(pair).await?;
         info!(
-            "✅ Fetched {} data points for {}",
-            pair_data.len(),
+            "✅ Fetched {} 1h data points for {}",
+            data.len(),
             pair.symbol().to_uppercase()
         );
 
-        // Process trades for this pair
-        for (price, volume) in &pair_data {
+        // Process trades using single timeframe data with carry income
+        let mut current_day = 0;
+        for (i, (price, volume)) in data.iter().enumerate() {
+            // Calculate current day (24 hours per day)
+            let day = i / 24;
+            
+            // Apply carry income at the start of each new day
+            if day > current_day {
+                backtester.apply_daily_carry_income(pair);
+                current_day = day;
+            }
+            
             backtester.process_trade(pair, *price, *volume);
         }
 
-        // Close any open position for this pair at market close
+        // Apply final carry income and close any open position for this pair at market close
+        backtester.apply_daily_carry_income(pair);
         if let Some(trader) = backtester.traders.get_mut(pair) {
             if trader.position > 0.0 {
-                let last_price = pair_data.last().unwrap().0;
+                let last_price = data.last().unwrap().0;
                 trader.sell(last_price);
                 info!(
                     "💰 Closed {} position at end of backtest at ${}",
@@ -306,7 +317,8 @@ async fn fetch_pair_data(pair: &TradingPair) -> Result<Vec<(f64, f64)>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis() as u64;
+        .as_millis();
+
     let now_seconds = now / 1000;
     let mut last_time = now_seconds - 365 * 24 * 60 * 60; // 1 year ago
     let mut all_ohlc = Vec::new();
@@ -314,7 +326,7 @@ async fn fetch_pair_data(pair: &TradingPair) -> Result<Vec<(f64, f64)>> {
     loop {
         let url = format!(
             "https://api.kraken.com/0/public/OHLC?pair={}&interval=60&since={}",
-            pair.kraken_pair(),
+            pair.kraken_symbol(),
             last_time
         );
         let response = client.get(&url).send().await?;
@@ -335,7 +347,7 @@ async fn fetch_pair_data(pair: &TradingPair) -> Result<Vec<(f64, f64)>> {
                             .and_then(|a| a.first())
                             .and_then(|v| v.as_u64())
                         {
-                            last_time = time_str;
+                            last_time = time_str as u128;
                         }
                     }
                 }
@@ -368,4 +380,204 @@ async fn fetch_pair_data(pair: &TradingPair) -> Result<Vec<(f64, f64)>> {
     }
 
     Ok(trades)
+}
+
+/// Fetch multi-timeframe data for a pair (15min, 1h, 4h)
+#[allow(dead_code)]
+async fn fetch_multi_timeframe_data(pair: &TradingPair) -> Result<MultiTimeframeData> {
+    let client = reqwest::Client::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+
+    let now_seconds = now / 1000;
+    let last_time = now_seconds - 365 * 24 * 60 * 60; // 1 year ago
+
+    // Fetch 15-minute data (more points for higher frequency)
+    let mut timeframe_15m = Vec::new();
+    let mut last_time_15m = last_time;
+
+    loop {
+        let url = format!(
+            "https://api.kraken.com/0/public/OHLC?pair={}&interval=15&since={}",
+            pair.kraken_symbol(),
+            last_time_15m
+        );
+        let response = client.get(&url).send().await?;
+        let json: serde_json::Value = response.json().await?;
+
+        if let Some(result) = json["result"].as_object() {
+            if let Some(pair_data) = result.get(pair.kraken_symbol()) {
+                if let Some(ohlc_array) = pair_data.as_array() {
+                    for ohlc in ohlc_array {
+                        if let Some(arr) = ohlc.as_array() {
+                            timeframe_15m.push(arr.clone());
+                        }
+                    }
+                    if let Some(last) = ohlc_array.last() {
+                        if let Some(time_str) = last
+                            .as_array()
+                            .and_then(|a| a.first())
+                            .and_then(|v| v.as_u64())
+                        {
+                            last_time_15m = time_str as u128;
+                        }
+                    }
+                }
+            }
+        }
+
+        if timeframe_15m.len() >= 720
+            || json["result"][pair.kraken_symbol()]
+                .as_array()
+                .is_none_or(|a| a.len() < 720)
+        {
+            break;
+        }
+    }
+
+    // Fetch 1-hour data
+    let mut timeframe_1h = Vec::new();
+    let mut last_time_1h = last_time;
+
+    loop {
+        let url = format!(
+            "https://api.kraken.com/0/public/OHLC?pair={}&interval=60&since={}",
+            pair.kraken_symbol(),
+            last_time_1h
+        );
+        let response = client.get(&url).send().await?;
+        let json: serde_json::Value = response.json().await?;
+
+        if let Some(result) = json["result"].as_object() {
+            if let Some(pair_data) = result.get(pair.kraken_symbol()) {
+                if let Some(ohlc_array) = pair_data.as_array() {
+                    for ohlc in ohlc_array {
+                        if let Some(arr) = ohlc.as_array() {
+                            timeframe_1h.push(arr.clone());
+                        }
+                    }
+                    if let Some(last) = ohlc_array.last() {
+                        if let Some(time_str) = last
+                            .as_array()
+                            .and_then(|a| a.first())
+                            .and_then(|v| v.as_u64())
+                        {
+                            last_time_1h = time_str as u128;
+                        }
+                    }
+                }
+            }
+        }
+
+        if timeframe_1h.len() >= 720
+            || json["result"][pair.kraken_symbol()]
+                .as_array()
+                .is_none_or(|a| a.len() < 720)
+        {
+            break;
+        }
+    }
+
+    // Fetch 4-hour data
+    let mut timeframe_4h = Vec::new();
+    let mut last_time_4h = last_time;
+
+    loop {
+        let url = format!(
+            "https://api.kraken.com/0/public/OHLC?pair={}&interval=240&since={}",
+            pair.kraken_symbol(),
+            last_time_4h
+        );
+        let response = client.get(&url).send().await?;
+        let json: serde_json::Value = response.json().await?;
+
+        if let Some(result) = json["result"].as_object() {
+            if let Some(pair_data) = result.get(pair.kraken_symbol()) {
+                if let Some(ohlc_array) = pair_data.as_array() {
+                    for ohlc in ohlc_array {
+                        if let Some(arr) = ohlc.as_array() {
+                            timeframe_4h.push(arr.clone());
+                        }
+                    }
+                    if let Some(last) = ohlc_array.last() {
+                        if let Some(time_str) = last
+                            .as_array()
+                            .and_then(|a| a.first())
+                            .and_then(|v| v.as_u64())
+                        {
+                            last_time_4h = time_str as u128;
+                        }
+                    }
+                }
+            }
+        }
+
+        if timeframe_4h.len() >= 720
+            || json["result"][pair.kraken_symbol()]
+                .as_array()
+                .is_none_or(|a| a.len() < 720)
+        {
+            break;
+        }
+    }
+
+    // Convert to trades format
+    let trades_15m = timeframe_15m
+        .iter()
+        .map(|ohlc| {
+            let close_price: f64 = ohlc[4]
+                .as_str()
+                .unwrap_or(&ohlc[4].to_string())
+                .parse()
+                .unwrap();
+            let volume: f64 = ohlc[6]
+                .as_str()
+                .unwrap_or(&ohlc[6].to_string())
+                .parse()
+                .unwrap();
+            (close_price, volume)
+        })
+        .collect();
+
+    let trades_1h = timeframe_1h
+        .iter()
+        .map(|ohlc| {
+            let close_price: f64 = ohlc[4]
+                .as_str()
+                .unwrap_or(&ohlc[4].to_string())
+                .parse()
+                .unwrap();
+            let volume: f64 = ohlc[6]
+                .as_str()
+                .unwrap_or(&ohlc[6].to_string())
+                .parse()
+                .unwrap();
+            (close_price, volume)
+        })
+        .collect();
+
+    let trades_4h = timeframe_4h
+        .iter()
+        .map(|ohlc| {
+            let close_price: f64 = ohlc[4]
+                .as_str()
+                .unwrap_or(&ohlc[4].to_string())
+                .parse()
+                .unwrap();
+            let volume: f64 = ohlc[6]
+                .as_str()
+                .unwrap_or(&ohlc[6].to_string())
+                .parse()
+                .unwrap();
+            (close_price, volume)
+        })
+        .collect();
+
+    Ok(MultiTimeframeData {
+        timeframe_15m: trades_15m,
+        timeframe_1h: trades_1h,
+        timeframe_4h: trades_4h,
+    })
 }

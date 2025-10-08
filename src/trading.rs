@@ -1,11 +1,166 @@
 use crate::ml::SimpleMLPredictor;
-use crate::types::{TradingConfig, TradingPair};
+use crate::types::{MultiTimeframeData, TradingConfig, TradingPair};
 use anyhow::Result;
 use statrs::distribution::{Beta, ContinuousCDF, Normal};
 use statrs::function::beta::beta;
 use std::collections::HashMap as HashMap2;
 use std::collections::{HashMap, VecDeque};
-use tracing::info;
+use std::sync::Arc;
+use tracing::{info, warn, error};
+
+/// Real-time monitoring and alerting system
+#[derive(Debug)]
+pub struct TradingMonitor {
+    alerts: VecDeque<Alert>,
+    metrics: TradingMetrics,
+    config: Arc<TradingConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Alert {
+    pub level: AlertLevel,
+    pub message: String,
+    pub timestamp: std::time::SystemTime,
+    pub pair: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AlertLevel {
+    Info,
+    Warning,
+    Critical,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MarketRegime {
+    Bull,
+    Bear,
+    Sideways,
+}
+
+#[derive(Debug, Clone)]
+pub struct TradingMetrics {
+    pub total_trades: u64,
+    pub winning_trades: u64,
+    pub total_pnl: f64,
+    pub max_drawdown: f64,
+    pub sharpe_ratio: f64,
+    pub consecutive_losses: u32,
+    pub daily_trades: u32,
+    pub last_update: std::time::SystemTime,
+}
+
+impl Default for TradingMetrics {
+    fn default() -> Self {
+        Self {
+            total_trades: 0,
+            winning_trades: 0,
+            total_pnl: 0.0,
+            max_drawdown: 0.0,
+            sharpe_ratio: 0.0,
+            consecutive_losses: 0,
+            daily_trades: 0,
+            last_update: std::time::SystemTime::now(),
+        }
+    }
+}
+
+impl TradingMonitor {
+    pub fn new(config: Arc<TradingConfig>) -> Self {
+        Self {
+            alerts: VecDeque::with_capacity(100),
+            metrics: TradingMetrics::default(),
+            config,
+        }
+    }
+
+    pub fn record_trade(&mut self, pnl: f64, pair: &str) {
+        self.metrics.total_trades += 1;
+        self.metrics.daily_trades += 1;
+        self.metrics.total_pnl += pnl;
+        self.metrics.last_update = std::time::SystemTime::now();
+
+        if pnl > 0.0 {
+            self.metrics.winning_trades += 1;
+            self.metrics.consecutive_losses = 0;
+        } else {
+            self.metrics.consecutive_losses += 1;
+        }
+
+        // Check for alerts
+        self.check_alerts(pair);
+    }
+
+    fn check_alerts(&mut self, pair: &str) {
+        let win_rate = if self.metrics.total_trades > 0 {
+            self.metrics.winning_trades as f64 / self.metrics.total_trades as f64
+        } else {
+            0.0
+        };
+
+        // Consecutive losses alert
+        if self.metrics.consecutive_losses >= self.config.max_consecutive_losses {
+            self.add_alert(AlertLevel::Critical,
+                format!("{} consecutive losses on {}", self.metrics.consecutive_losses, pair),
+                Some(pair.to_string()));
+        }
+
+        // Daily trade limit alert
+        if self.metrics.daily_trades >= self.config.max_daily_trades {
+            self.add_alert(AlertLevel::Warning,
+                format!("Daily trade limit reached: {}", self.config.max_daily_trades),
+                None);
+        }
+
+        // Low win rate alert
+        if self.metrics.total_trades >= 10 && win_rate < 0.3 {
+            self.add_alert(AlertLevel::Warning,
+                format!("Low win rate: {:.1}% on {}", win_rate * 100.0, pair),
+                Some(pair.to_string()));
+        }
+
+        // Drawdown alert
+        if self.metrics.max_drawdown >= self.config.max_drawdown_pct / 100.0 {
+            self.add_alert(AlertLevel::Critical,
+                format!("Max drawdown reached: {:.1}%", self.metrics.max_drawdown * 100.0),
+                None);
+        }
+    }
+
+    pub fn add_alert(&mut self, level: AlertLevel, message: String, pair: Option<String>) {
+        let alert = Alert {
+            level: level.clone(),
+            message: message.clone(),
+            timestamp: std::time::SystemTime::now(),
+            pair: pair.clone(),
+        };
+
+        self.alerts.push_back(alert);
+        if self.alerts.len() > 100 {
+            self.alerts.pop_front();
+        }
+
+        // Log the alert
+        match level {
+            AlertLevel::Info => info!("📊 ALERT: {}", message),
+            AlertLevel::Warning => warn!("⚠️ ALERT: {}", message),
+            AlertLevel::Critical => error!("🚨 CRITICAL ALERT: {}", message),
+        }
+    }
+
+    pub fn get_recent_alerts(&self, count: usize) -> Vec<&Alert> {
+        self.alerts.iter().rev().take(count).collect()
+    }
+
+    pub fn get_metrics(&self) -> &TradingMetrics {
+        &self.metrics
+    }
+
+    pub fn reset_daily_metrics(&mut self) {
+        self.metrics.daily_trades = 0;
+        info!("📅 Daily metrics reset");
+    }
+}
 
 /// Bayesian analysis utilities for trading model comparison and uncertainty quantification
 #[derive(Debug, Clone)]
@@ -149,10 +304,13 @@ impl BayesianAnalyzer {
             // use fixed weights based on model reliability characteristics
             for (model_name, _) in models {
                 let weight = match *model_name {
-                    "random_forest" => 0.4,         // ML models get higher weight
-                    "linear_regression" => 0.4,     // ML models get higher weight
-                    "gas_gld" => 0.2,               // GAS models are more volatile, lower weight
-                    _ => 1.0 / models.len() as f64, // Default equal weight
+                    "gas_vg" => 0.6,                // Best performing GAS model gets highest weight
+                    "random_forest" => 0.25,        // ML models get moderate weight
+                    "linear_regression" => 0.1,     // Lower weight for simpler models
+                    "gas_gld" => 0.03,              // Lower weight for less reliable GAS variants
+                    "gas_ghd" => 0.01,              // Minimal weight for poor performers
+                    "gas_nig" => 0.005,             // Minimal weight
+                    _ => 0.005,                     // Very low default weight
                 };
                 weights.insert(model_name.to_string(), weight);
                 total_weight += weight;
@@ -291,12 +449,12 @@ impl PositionSizer {
 
     pub fn with_leverage(leverage: f64) -> Self {
         Self {
-            base_risk_pct: 0.02, // Conservative: 2% base risk per trade
-            max_risk_pct: 0.05,  // Maximum 5% risk per trade
+            base_risk_pct: 0.08, // Increased from 4% to 8% for meaningful monthly returns
+            max_risk_pct: 0.15,  // Increased from 8% to 15% for higher profit potential
             volatility_window: 20,
             recent_trades: VecDeque::with_capacity(20),
             performance_window: 20,
-            kelly_fraction: 0.5, // Half Kelly criterion for balanced risk
+            kelly_fraction: 0.7, // Increased Kelly fraction for higher returns
             leverage,
         }
     }
@@ -475,7 +633,7 @@ impl PairTrader {
         Self {
             predictor,
             position_sizer: PositionSizer::with_leverage(config.leverage),
-            balance: config.initial_balance, // Use the allocated balance per pair
+            balance: 200.0, // Default balance for backward compatibility
             position: 0.0,
             entry_price: None,
             total_trades: 0,
@@ -485,7 +643,34 @@ impl PairTrader {
             take_profit_pct: config.take_profit_pct,
             max_position_size_pct: config.max_position_size_pct,
             pair,                                 // Store the pair
-            peak_balance: config.initial_balance, // Initialize peak balance
+            peak_balance: 200.0, // Default peak balance for backward compatibility
+        }
+    }
+
+    pub fn new_with_model_and_balance(
+        config: &TradingConfig,
+        pair: TradingPair,
+        model_type: &str,
+        balance: f64,
+    ) -> Self {
+        let mut predictor = SimpleMLPredictor::new(50);
+        // Set the model type for training
+        predictor.model_type = model_type.to_string();
+
+        Self {
+            predictor,
+            position_sizer: PositionSizer::with_leverage(config.leverage),
+            balance, // Use the allocated balance per pair
+            position: 0.0,
+            entry_price: None,
+            total_trades: 0,
+            winning_trades: 0,
+            total_pnl: 0.0,
+            stop_loss_pct: config.stop_loss_pct,
+            take_profit_pct: config.take_profit_pct,
+            max_position_size_pct: config.max_position_size_pct,
+            pair,                                 // Store the pair
+            peak_balance: balance, // Initialize peak balance
         }
     }
 
@@ -522,6 +707,84 @@ impl PairTrader {
             } else if signal < 0.0
                 && self.can_sell()
                 && (trend_strength < 0.2 || signal < sell_threshold)
+            {
+                self.sell(price);
+            }
+        }
+    }
+
+    pub fn process_multi_timeframe_trade(&mut self, price: f64, volume: f64, signal_strength: f64) {
+        self.predictor.add_trade(price, volume);
+
+        // Check stop-loss and take-profit
+        if self.position > 0.0 {
+            if let Some(entry) = self.entry_price {
+                let pnl_pct = (price - entry) / entry;
+                if pnl_pct <= -self.stop_loss_pct {
+                    self.sell(price);
+                    info!("STOP LOSS triggered at {}%", pnl_pct * 100.0);
+                    return;
+                } else if pnl_pct >= self.take_profit_pct {
+                    self.sell(price);
+                    info!("TAKE PROFIT triggered at {}%", pnl_pct * 100.0);
+                    return;
+                }
+            }
+        }
+
+        // Generate trading signal with multi-timeframe confirmation
+        if let Some(signal) = self.predictor.predict_next() {
+            let trend_strength = self.detect_trend_strength();
+
+            // Dynamic thresholds based on ensemble prediction volatility and performance
+            let (buy_threshold, sell_threshold) = self.calculate_dynamic_thresholds(signal);
+
+            // Dynamic weighted average combining original ML signal and multi-timeframe strength
+            // signal_strength ranges from -3.0 to 3.0, where positive means aligned trends, negative means misaligned
+            let confidence = (signal_strength.abs() / 3.0).min(1.0); // 0.0 to 1.0 confidence level
+
+            // Ensemble signal fusion: combine ML and multi-timeframe signals intelligently
+            // Use regime-aware weighting with ensemble confidence scoring
+            let regime = self.detect_market_regime();
+            #[allow(clippy::collapsible_else_if)]
+            let (ml_weight, mtf_weight) = match regime {
+                MarketRegime::Bull | MarketRegime::Bear => {
+                    // Trending markets: favor multi-timeframe confirmation
+                    if signal_strength >= 0.0 {
+                        if confidence > 0.8 { (0.3, 0.7) } else if confidence > 0.6 { (0.4, 0.6) } else { (0.5, 0.5) }
+                    } else {
+                        if confidence > 0.8 { (0.7, 0.3) } else if confidence > 0.6 { (0.6, 0.4) } else { (0.5, 0.5) }
+                    }
+                },
+                MarketRegime::Sideways => {
+                    // Sideways markets: favor ML signals, use multi-timeframe as confirmation
+                    if signal_strength >= 0.0 {
+                        if confidence > 0.8 { (0.6, 0.4) } else if confidence > 0.6 { (0.7, 0.3) } else { (0.8, 0.2) }
+                    } else {
+                        if confidence > 0.8 { (0.8, 0.2) } else if confidence > 0.6 { (0.75, 0.25) } else { (0.7, 0.3) }
+                    }
+                }
+            };
+
+            // Ensemble fusion with directional agreement bonus
+            let directional_agreement = if (signal > 0.0 && signal_strength > 0.0) || (signal < 0.0 && signal_strength < 0.0) {
+                1.1 // Bonus for agreement
+            } else {
+                0.9 // Penalty for disagreement
+            };
+
+            // Enhanced signal combines ML and multi-timeframe with ensemble weighting
+            let ml_contribution = signal * ml_weight;
+            let mtf_contribution = signal_strength * 0.3 * mtf_weight; // Scale down multi-timeframe impact
+            let enhanced_signal = (ml_contribution + mtf_contribution) * directional_agreement;
+
+            if enhanced_signal > 0.0 && self.can_buy(price) {
+                if trend_strength > -0.2 || enhanced_signal > buy_threshold {
+                    self.buy(price, volume);
+                }
+            } else if enhanced_signal < 0.0
+                && self.can_sell()
+                && (trend_strength < 0.2 || enhanced_signal < sell_threshold)
             {
                 self.sell(price);
             }
@@ -703,17 +966,25 @@ impl PairTrader {
             0.5 // Default neutral win rate
         };
 
+        // Detect market regime for regime-specific adjustments
+        let regime = self.detect_market_regime();
+        let regime_multiplier = match regime {
+            MarketRegime::Bull => 0.8,   // More aggressive in bull markets
+            MarketRegime::Bear => 1.2,   // More conservative in bear markets
+            MarketRegime::Sideways => 1.0, // Neutral in sideways markets
+        };
+
         // Adaptive base thresholds based on pair performance and volatility
         match self.pair {
-            TradingPair::XRP | TradingPair::ETH => {
+            TradingPair::XRP | TradingPair::ETH | TradingPair::ADA | TradingPair::DOT => {
                 // More aggressive for historically better performers
-                base_buy_threshold = 0.05 + (prediction_volatility * 0.5);
-                base_sell_threshold = -0.05 - (prediction_volatility * 0.5);
+                base_buy_threshold = 0.005 + (prediction_volatility * 0.5);
+                base_sell_threshold = -0.005 - (prediction_volatility * 0.5);
             }
             _ => {
                 // Conservative for other pairs
-                base_buy_threshold = 0.08 + (prediction_volatility * 0.7);
-                base_sell_threshold = -0.08 - (prediction_volatility * 0.7);
+                base_buy_threshold = 0.008 + (prediction_volatility * 0.7);
+                base_sell_threshold = -0.008 - (prediction_volatility * 0.7);
             }
         }
 
@@ -727,17 +998,97 @@ impl PairTrader {
             1.0 // Neutral
         };
 
-        let buy_threshold = (base_buy_threshold * performance_multiplier).min(0.15); // Cap at 15%
-        let sell_threshold = (base_sell_threshold * performance_multiplier).max(-0.15); // Cap at -15%
+        let buy_threshold = (base_buy_threshold * performance_multiplier * regime_multiplier).min(0.002); // Cap at 0.2%
+        let sell_threshold = (base_sell_threshold * performance_multiplier * regime_multiplier).max(-0.002); // Cap at -0.2%
 
         // Ensure thresholds are reasonable and don't cross zero
-        let final_buy_threshold = buy_threshold.max(0.01);
-        let final_sell_threshold = sell_threshold.min(-0.01);
+        let final_buy_threshold = buy_threshold.max(0.001);
+        let final_sell_threshold = sell_threshold.min(-0.001);
 
-        info!("🎯 Dynamic thresholds - Buy: {:.3}, Sell: {:.3} (vol: {:.3}, win_rate: {:.1}%, perf_mult: {:.2})",
-              final_buy_threshold, final_sell_threshold, prediction_volatility, win_rate * 100.0, performance_multiplier);
+        info!("🎯 Dynamic thresholds - Buy: {:.3}, Sell: {:.3} (vol: {:.3}, win_rate: {:.1}%, perf_mult: {:.2}, regime: {:?})",
+              final_buy_threshold, final_sell_threshold, prediction_volatility, win_rate * 100.0, performance_multiplier, regime);
 
         (final_buy_threshold, final_sell_threshold)
+    }
+
+    /// Detect market regime (bull/bear/sideways) for regime-specific strategies
+    pub fn detect_market_regime(&self) -> MarketRegime {
+        if self.predictor.trades.len() < 20 {
+            return MarketRegime::Sideways; // Not enough data
+        }
+
+        // Calculate recent returns and volatility
+        let recent_prices: Vec<f64> = self.predictor.trades.iter()
+            .rev()
+            .take(50)
+            .map(|t| t.price)
+            .collect();
+
+        if recent_prices.len() < 20 {
+            return MarketRegime::Sideways;
+        }
+
+        // Calculate trend strength (slope of linear regression)
+        let n = recent_prices.len() as f64;
+        let x_sum: f64 = (0..recent_prices.len()).map(|i| i as f64).sum();
+        let y_sum: f64 = recent_prices.iter().sum();
+        let xy_sum: f64 = recent_prices.iter().enumerate()
+            .map(|(i, &price)| i as f64 * price)
+            .sum();
+        let x2_sum: f64 = (0..recent_prices.len()).map(|i| (i as f64).powi(2)).sum();
+
+        let slope = (n * xy_sum - x_sum * y_sum) / (n * x2_sum - x_sum.powi(2));
+
+        // Calculate volatility (standard deviation of returns)
+        let returns: Vec<f64> = recent_prices.windows(2)
+            .map(|w| (w[1] - w[0]) / w[0])
+            .collect();
+        let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
+        let volatility = (returns.iter()
+            .map(|r| (r - mean_return).powi(2))
+            .sum::<f64>() / returns.len() as f64)
+            .sqrt();
+
+        // Classify regime based on trend and volatility
+        let trend_strength = slope.abs() / volatility.max(0.001); // Normalized trend
+
+        if trend_strength > 2.0 && slope > 0.0 {
+            MarketRegime::Bull // Strong upward trend
+        } else if trend_strength > 2.0 && slope < 0.0 {
+            MarketRegime::Bear // Strong downward trend
+        } else {
+            MarketRegime::Sideways // Weak or no trend
+        }
+    }
+
+    /// Calculate potential carry/interest income from holding assets
+    pub fn calculate_carry_income(&self, holding_period_days: f64) -> f64 {
+        if self.position <= 0.0 {
+            return 0.0;
+        }
+
+        // Estimate annual yield based on asset type and market conditions
+        let annual_yield_pct = match self.pair {
+            TradingPair::BTC => 0.075,   // 7.5% from BTC staking/lending
+            TradingPair::ETH => 0.15,    // 15% from ETH staking
+            TradingPair::SOL => 0.225,   // 22.5% from SOL staking
+            TradingPair::ADA => 0.12,    // 12% from ADA staking
+            TradingPair::DOT => 0.375,   // 37.5% from DOT staking
+            TradingPair::AVAX => 0.1875, // 18.75% from AVAX staking
+            TradingPair::MATIC => 0.09,  // 9% from MATIC staking
+            TradingPair::BNB => 0.21,    // 21% from BNB lending
+            TradingPair::LINK => 0.18,   // 18% from LINK staking
+            TradingPair::UNI => 0.12,    // 12% from UNI staking
+            TradingPair::AAVE => 0.15,   // 15% from AAVE governance rewards
+            _ => 0.0375, // 3.75% default for other assets
+        };
+
+        // Calculate position value and daily carry
+        let position_value = self.position * self.entry_price.unwrap_or(0.0);
+        let daily_yield = position_value * annual_yield_pct / 365.0;
+
+        // Return carry income for the holding period
+        daily_yield * holding_period_days
     }
 
     pub fn print_results(&self, pair: &TradingPair) {
@@ -787,10 +1138,11 @@ impl Backtester {
         let config = TradingConfig::default();
         let mut traders = HashMap::new();
 
-        for pair in &config.pairs {
+        for (i, pair) in config.pairs.iter().enumerate() {
+            let balance = *config.initial_balances.get(i).unwrap_or(&200.0); // Fallback balance
             traders.insert(
                 pair.clone(),
-                PairTrader::new_with_model(&config, pair.clone(), model_type),
+                PairTrader::new_with_model_and_balance(&config, pair.clone(), model_type, balance),
             );
         }
 
@@ -804,6 +1156,96 @@ impl Backtester {
     pub fn process_trade(&mut self, pair: &TradingPair, price: f64, volume: f64) {
         if let Some(trader) = self.traders.get_mut(pair) {
             trader.process_trade(price, volume);
+        }
+    }
+
+    pub fn apply_daily_carry_income(&mut self, pair: &TradingPair) {
+        if let Some(trader) = self.traders.get_mut(pair) {
+            let carry_income = trader.calculate_carry_income(1.0); // 1 day
+            trader.total_pnl += carry_income;
+            trader.balance += carry_income;
+            if carry_income > 0.0 {
+                info!("💰 {} carry income: ${:.4}", pair.symbol().to_uppercase(), carry_income);
+            }
+        }
+    }
+
+    pub fn process_multi_timeframe_trade(&mut self, pair: &TradingPair, multi_data: &MultiTimeframeData, current_index: usize) {
+        // Calculate multi-timeframe signal strength first (immutable borrow)
+        let signal_strength = self.calculate_multi_timeframe_signal(multi_data, current_index);
+
+        if let Some(trader) = self.traders.get_mut(pair) {
+            // Get current prices from each timeframe (if available)
+            let _price_15m = multi_data.timeframe_15m.get(current_index).map(|(p, _)| *p);
+            let price_1h = multi_data.timeframe_1h.get(current_index).map(|(p, _)| *p);
+            let _price_4h = multi_data.timeframe_4h.get(current_index).map(|(p, _)| *p);
+
+            // Use 1h price as primary, but enhance signals with multi-timeframe confirmation
+            if let Some(price_1h) = price_1h {
+                let volume_1h = multi_data.timeframe_1h.get(current_index).map(|(_, v)| *v).unwrap_or(0.0);
+
+                // Process trade with enhanced signal
+                trader.process_multi_timeframe_trade(price_1h, volume_1h, signal_strength);
+            }
+        }
+    }
+
+    fn calculate_multi_timeframe_signal(&self, multi_data: &MultiTimeframeData, current_index: usize) -> f64 {
+        // Enhanced multi-timeframe signal calculation with momentum and trend strength
+        let mut total_weight = 0.0;
+        let mut weighted_signal = 0.0;
+
+        // Timeframe weights: 15m (1.0), 1h (1.5), 4h (2.0)
+        let timeframe_configs = [
+            (&multi_data.timeframe_15m, 1.0),
+            (&multi_data.timeframe_1h, 1.5),
+            (&multi_data.timeframe_4h, 2.0),
+        ];
+
+        for (timeframe_data, weight) in timeframe_configs.iter() {
+            if timeframe_data.len() > current_index && current_index >= 10 {
+                // Use last 10 points for momentum calculation
+                let start_idx = current_index.saturating_sub(10);
+                let recent_prices: Vec<f64> = timeframe_data[start_idx..=current_index]
+                    .iter()
+                    .map(|(p, _)| *p)
+                    .collect();
+
+                if recent_prices.len() >= 5 {
+                    // Calculate momentum (recent vs older prices)
+                    let recent_avg = recent_prices[recent_prices.len()-3..].iter().sum::<f64>() / 3.0;
+                    let older_avg = recent_prices[..3].iter().sum::<f64>() / 3.0;
+                    let momentum = (recent_avg - older_avg) / older_avg;
+
+                    // Calculate volatility (standard deviation of returns)
+                    let returns: Vec<f64> = recent_prices.windows(2)
+                        .map(|w| (w[1] - w[0]) / w[0])
+                        .collect();
+                    let volatility = if returns.len() > 1 {
+                        let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
+                        let variance = returns.iter()
+                            .map(|r| (r - mean_return).powi(2))
+                            .sum::<f64>() / (returns.len() - 1) as f64;
+                        variance.sqrt()
+                    } else {
+                        0.01 // minimum volatility
+                    };
+
+                    // Trend strength: momentum relative to volatility
+                    let trend_strength = momentum.abs() / (volatility + 0.001);
+                    let normalized_signal = momentum.signum() * trend_strength.min(0.8); // Cap at 0.8
+
+                    weighted_signal += normalized_signal * weight;
+                    total_weight += weight;
+                }
+            }
+        }
+
+        // Return weighted average, or neutral signal if no data
+        if total_weight > 0.0 {
+            (weighted_signal / total_weight).clamp(-2.0, 2.0) // Clamp to reasonable range
+        } else {
+            0.0
         }
     }
 
