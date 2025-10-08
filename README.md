@@ -1,5 +1,9 @@
 # 🚀 Crypto Trading Bot with ML Predictions
 
+## ⚖️ Disclaimer
+
+This is experimental software. Trading cryptocurrencies involves significant risk. Use at your own risk. The authors are not responsible for any financial losses.
+
 A sophisticated crypto trading bot that uses machine learning to predict price movements and execute trades on **Kraken**. Built with Rust and barter-rs ecosystem.
 
 ## ✨ Features
@@ -13,13 +17,6 @@ A sophisticated crypto trading bot that uses machine learning to predict price m
 - **Backtesting & Paper Trading**: Comprehensive testing modes with realistic market simulation
 
 ## 📊 Performance
-
-**Backtest Results:**
-
-- 17 trades executed
-- 35.29% win rate
-- Risk-managed position sizing
-- Ready for live deployment
 
 ## 🏗️ Architecture
 
@@ -114,10 +111,4 @@ The bot provides real-time logging:
 4. Add tests
 5. Submit a pull request
 
-## ⚖️ Disclaimer
 
-This is experimental software. Trading cryptocurrencies involves significant risk. Use at your own risk. The authors are not responsible for any financial losses.
-
-## 📄 License
-
-MIT License - see LICENSE file for details.
